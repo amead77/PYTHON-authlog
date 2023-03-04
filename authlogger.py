@@ -1,4 +1,4 @@
-#todo
+#*todo
 #
 # failure count is ignored. implement*****
 # --create record array: ip, fail count
@@ -9,7 +9,16 @@
 # inifile isn't actually used or even written to
 # auth needs sorting
 #
-#notes
+#*notes
+# literally too lazy to do anything else to this unless it breaks.
+# currently in use on my rpi because it's always connected and powered on.
+# at various points I've tried to implement keyboard input, but over shh (even with sshkeyboard)
+# it breaks.
+# Should now try to raise auth level if not sudo root. that bit of code i stole off the net
+# and can't remember where i got it from. If you recognise it and let me know, i'll link
+# credit to it.
+#
+#
 #'iptables -I INPUT -s '+slBlocklist.Strings[i]+' -j DROP'
 
 from getpass import getpass
