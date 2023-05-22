@@ -31,8 +31,10 @@ import os, argparse, sys, io, time, subprocess
 #debugmode = True
 debugmode = False
 
-version = "2023-01-27 22:22:44"
+version = "2023-05-22 20:22"
 #2023-02-12 21:37:26
+
+authlogModtime = 0 #time of last auth.log modification
 
 def ErrorArg(err):
     match err:
@@ -156,7 +158,7 @@ def getArgs():
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
     parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+'/blocklist.txt')
-    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=2)
+    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 1-currently ignored)', default=2)
     parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
     parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
     #parser.add_argument('-p', '--PassThru', dest='PassThru', action='store', help='parameters to pass to CMD', default='')
@@ -241,6 +243,19 @@ def rebuildblockfile():
     print('done at '+time.ctime(timenow))
 
 
+def AddNewIPToBlocklist(ip):
+    #update iptables rules without clearing them all first
+    print('adding: '+ip)
+    if not debugmode:
+        print('pushing ->'+ip)
+        subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
+        subprocess.call(['/sbin/iptables-save'])
+    else:
+        print("debug mode")
+    return
+
+
+
 def scanandcompare():
     global authstrings
     global blocklist
@@ -266,6 +281,7 @@ def scanandcompare():
                 print('adding: '+aline)
                 blocklist.append(aline)
                 newblock = True
+                AddNewIPToBlocklist(aline)
 
     return newblock
 
@@ -285,6 +301,22 @@ def press(key):
 #    if key == "escape":
 #        stop_listening()
 #        ErrorArg(0)
+
+def authModified():
+    global authlogModtime
+    global authfile
+
+    authModified = False
+
+    if (os.path.isfile(authfile)):
+        if (os.path.getmtime(authfile) != authlogModtime):
+            authlogModtime = os.path.getmtime(authfile)
+            authModified = True
+    else:
+        print('auth.log file not found')
+        ErrorArg(2)
+
+    return authModified
 
 
 def main():
@@ -317,14 +349,17 @@ def main():
 
             if x == 10:
                 x = 1
-                openauthfile()
-                if scanandcompare():
-                    rebuild = True
+                if (authModified()):
+                    openauthfile()
+                    if scanandcompare():
+                        rebuild = True
             dtime(200) #rather than pause for 2 seconds, pause 10x 200ms, to prevent blocking.
         
-            if rebuild:
-                rebuildblockfile()
-                rebuild = False
+            #lets not rebuild the blocklist every time we scan, just when we need to
+            #if rebuild:
+            #    rebuildblockfile()
+            #    rebuild = False
+
 #        except KeyboardInterrupt:
 #            break
 
