@@ -1,13 +1,14 @@
 #*todo
 #
 # failure count is ignored. implement*****
+# currently only blocks on first failure. need to implement a counter and block on x failures
 # --create record array: ip, fail count
 # --during scan increment fail count on every find
 # --at end of scan block based on failcount
 # --maybe also consider what is already in the blocklist
 # keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
 # inifile isn't actually used or even written to
-# auth needs sorting
+# 
 #
 #*notes
 # literally too lazy to do anything else to this unless it breaks.
