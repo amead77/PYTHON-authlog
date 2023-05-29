@@ -215,6 +215,15 @@ def openauthfile():
             authstrings[x]=authstrings[x].strip('\n')
         #print(authstrings)
 
+def writeblockfile():
+    global blocklist
+    global blockfile
+    global fblockfile
+    print('writing new blockfile')
+    fblockfile = io.open(blockfile, 'wt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
+    fblockfile.writelines("%s\n" % l for l in blocklist)
+    fblockfile.close
+    print('done')
 
 def rebuildblockfile():
     global fblockfile
@@ -230,10 +239,7 @@ def rebuildblockfile():
             
         print('pushing ->'+line)
 
-    print('writing new blockfile')
-    fblockfile = io.open(blockfile, 'wt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
-    fblockfile.writelines("%s\n" % l for l in blocklist)
-    fblockfile.close
+
     print('Saving iptables rules')
     if not debugmode:
         subprocess.call(['/sbin/iptables-save'])
@@ -353,7 +359,7 @@ def main():
                 if (authModified()):
                     openauthfile()
                     if scanandcompare():
-                        rebuild = True
+                        writeblockfile()
             dtime(200) #rather than pause for 2 seconds, pause 10x 200ms, to prevent blocking.
         
             #lets not rebuild the blocklist every time we scan, just when we need to
