@@ -165,6 +165,8 @@ def getArgs():
     #parser.add_argument('-p', '--PassThru', dest='PassThru', action='store', help='parameters to pass to CMD', default='')
     args = parser.parse_args()
 
+#inifile isn't used yet
+#failcount is ignored, currently always blocks on first failure
     blockfile = args.blockfile
     localip = args.localip
     authfile = args.authfile
@@ -228,7 +230,7 @@ def writeblockfile():
 def rebuildblockfile():
     global fblockfile
     global blocklist
-    blocklist.sort()
+    #blocklist.sort() #not needed, might make searching quicker but means last in isn't last block.
     print('pushing new iptables rules')
     subprocess.call(['/sbin/iptables', '--flush'])
     for line in blocklist:
@@ -256,7 +258,7 @@ def AddNewIPToBlocklist(ip):
     if not debugmode:
         print('pushing ->'+ip)
         subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
-        subprocess.call(['/sbin/iptables-save'])
+        subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit
     else:
         print("debug mode")
     return
