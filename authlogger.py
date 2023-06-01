@@ -22,6 +22,10 @@
 #
 #
 #'iptables -I INPUT -s '+slBlocklist.Strings[i]+' -j DROP'
+#
+# change notes
+# 2023-06-01 beginning to implement failcount, but not done yet
+#
 
 from getpass import getpass
 import os, argparse, sys, io, time, subprocess
@@ -33,10 +37,11 @@ import os, argparse, sys, io, time, subprocess
 #debugmode = True
 debugmode = False
 
-version = "2023-05-22 20:22"
+version = "2023-06-01" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 authlogModtime = 0 #time of last auth.log modification
+blocklistModtime = 0 #time of last blocklist modification
 
 def ErrorArg(err):
     match err:
@@ -191,13 +196,15 @@ def openblockfile():
     global blockfile
     global blocklist
     global fblockfile
+    global authlogModtime
     if (os.path.isfile(blockfile)):
+        authlogModtime = os.path.getmtime(authfile)
         fblockfile = io.open(blockfile, 'rt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
         blocklist=fblockfile.readlines()
         for x in range(0, len(blocklist)):
             blocklist[x]=blocklist[x].strip('\n')
         #print(blocklist)
-        fblockfile.close
+        fblockfile.close()
 
 
 def openauthfile():
