@@ -35,13 +35,29 @@ import os, argparse, sys, io, time, subprocess
 #from subprocess import call
 
 #debugmode = True
-debugmode = False
+debugmode = True
 
 version = "2023-06-01" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 authlogModtime = 0 #time of last auth.log modification
 blocklistModtime = 0 #time of last blocklist modification
+
+class Block:
+    def __init__(self, datetime, ip, failcount):
+        self.datetime = datetime
+        self.ip = ip
+        self.failcount = failcount
+
+
+def checkOSisLinux():
+    #this is because it is designed to run on Linux, but I also code on Windows, in which case I don't want it to run all the code
+    if sys.platform.startswith('linux'):
+        debugmode = True
+        return True
+    else:
+        return False
+        
 
 def ErrorArg(err):
     match err:
@@ -65,7 +81,10 @@ def ErrorArg(err):
 #   geteuid: get effective user id, getuid: get user actual id
 #   with: os.geteuid() == 0 returns true/false, else uid number
 def is_root(): 
-    return os.geteuid() == 0
+    if not debugmode:
+        return os.geteuid() == 0
+    else:
+        return 0
 
 
 def test_sudo(pwd=""):
@@ -85,18 +104,20 @@ def test_sudo(pwd=""):
 
 
 def prompt_sudo():#with == 0 returns true/false, else uid number
-    ok = is_root() or test_sudo()
-    if not ok:
-        try:
-            pwd = getpass("password: ")
-        except:
-            print("abandoning sudo")
-        finally:
-            pass
+    if not debugmode:
+        ok = is_root() or test_sudo()
+        if not ok:
+            try:
+                pwd = getpass("password: ")
+            except:
+                print("abandoning sudo")
+            finally:
+                pass
 
-        ok  = test_sudo(pwd)
-    return ok
-    
+            ok  = test_sudo(pwd)
+        return ok
+    else:
+        return True
 
 
 if prompt_sudo():
@@ -107,11 +128,12 @@ else:
 
 
 def welcome():
-    if debugmode:
-        print("EUID: ", os.geteuid())
-        dtime(2000)
+    #if debugmode:
+    #    print("EUID: ", os.geteuid())
+    #    dtime(2000)
     print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
     print('Does some of what other, better, programs do, but worse!\n')
+    print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
     print('version: '+version)
     print("Press ESCAPE to exit, or just crash out with ctrl-c, whatever")
     if not is_root(): 
@@ -178,7 +200,8 @@ def getArgs():
     authfile = args.authfile
     failcount = args.failcount
     inifile = args.inifile
-
+    if debugmode:
+        authfile = StartDir+'\\auth.log'
     if authfile == '': ErrorArg(2)
     if blockfile == '': ErrorArg(2)
     if failcount < 1: ErrorArg(2)
@@ -211,44 +234,57 @@ def openauthfile():
     global authfile
     global blocklist
     global authstrings
+    fauthfile = None
     #print('auth open')
     if (os.path.isfile(authfile)):
         try:
+            print('attempt auth open: ' + authfile)
             fauthfile = io.open(authfile, 'rt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
             authstrings=fauthfile.readlines()
         except:
             pass
         finally:
-            fauthfile.close
+            if fauthfile is not None:
+                fauthfile.close
+                print('auth close: ' + authfile)
+            else:
+                print('cannot auth close: ' + authfile + ' probably not opened')
         
         for x in range(0, len(authstrings)):
             authstrings[x]=authstrings[x].strip('\n')
         #print(authstrings)
 
+
 def writeblockfile():
     global blocklist
     global blockfile
     global fblockfile
+    if debugmode:
+        print('debug mode: not writing blockfile')
+        return
     print('writing new blockfile')
     fblockfile = io.open(blockfile, 'wt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
     fblockfile.writelines("%s\n" % l for l in blocklist)
     fblockfile.close
     print('done')
 
+
 def rebuildblockfile():
+    #this is now only called once during startup, to populate the blocklist, further updates are done with AddNewIPToBlocklist()
     global fblockfile
     global blocklist
     #blocklist.sort() #not needed, might make searching quicker but means last in isn't last block.
     print('pushing new iptables rules')
-    subprocess.call(['/sbin/iptables', '--flush'])
+    if not debugmode:
+        #do i really want to flush beforehand? what if there are other rules?
+        subprocess.call(['/sbin/iptables', '--flush'])
     for line in blocklist:
         if not debugmode:
             subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', line, '-j', 'DROP'])
         else:
-            print("debug mode")
+            print("Rebuild/debug mode: iptables -I INPUT -s "+line+" -j DROP")
             
         print('pushing ->'+line)
-
 
     print('Saving iptables rules')
     if not debugmode:
@@ -268,10 +304,17 @@ def AddNewIPToBlocklist(ip):
         subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
         subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit
     else:
-        print("debug mode")
+        print("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
     return
 
-
+def isIPinBlocklist(ip):
+    global blocklist
+    foundit = False
+    for bline in blocklist:
+        if bline == ip:
+            foundit = True
+            break
+    return foundit
 
 def scanandcompare():
     global authstrings
@@ -289,11 +332,7 @@ def scanandcompare():
                 aline = tmp[len(tmp)-4]
             else:
                 aline = tmp[len(tmp)-3]
-            foundit = False
-            for bline in blocklist:
-                if bline == aline:
-                    foundit = True
-                    break
+            foundit = isIPinBlocklist(aline)
             if not foundit:            
                 print('adding: '+aline)
                 blocklist.append(aline)
@@ -346,7 +385,9 @@ def main():
     global fblockfile
     global authstrings
     global inifile
-
+    if not checkOSisLinux():
+        print("not linux, so going into debug mode")
+        
     rebuild = False
     StartDir = RemoveTrailingSlash(os.getcwd())
 
