@@ -29,12 +29,12 @@
 
 from getpass import getpass
 import os, argparse, sys, io, time, subprocess
+from libby import *
 #from sshkeyboard import listen_keyboard, stop_listening
 
 #import keyboard
 #from subprocess import call
 
-#debugmode = True
 debugmode = True
 
 version = "2023-06-01" #really need to update this every time I change something
@@ -50,13 +50,6 @@ class Block:
         self.failcount = failcount
 
 
-def checkOSisLinux():
-    #this is because it is designed to run on Linux, but I also code on Windows, in which case I don't want it to run all the code
-    if sys.platform.startswith('linux'):
-        debugmode = True
-        return True
-    else:
-        return False
         
 
 def ErrorArg(err):
@@ -77,54 +70,6 @@ def ErrorArg(err):
     sys.exit(err)
 
 
-#is_root()
-#   geteuid: get effective user id, getuid: get user actual id
-#   with: os.geteuid() == 0 returns true/false, else uid number
-def is_root(): 
-    if not debugmode:
-        return os.geteuid() == 0
-    else:
-        return 0
-
-
-def test_sudo(pwd=""):
-    args = "sudo -S echo OK".split()
-    kwargs = dict(stdout=subprocess.PIPE,
-                  encoding="ascii")
-    if pwd:
-        kwargs.update(input=pwd)
-    try:
-        cmd = subprocess.run(args, **kwargs)
-    except:
-        print("probs")
-    finally:
-        pass
-
-    return ("OK" in cmd.stdout)
-
-
-def prompt_sudo():#with == 0 returns true/false, else uid number
-    if not debugmode:
-        ok = is_root() or test_sudo()
-        if not ok:
-            try:
-                pwd = getpass("password: ")
-            except:
-                print("abandoning sudo")
-            finally:
-                pass
-
-            ok  = test_sudo(pwd)
-        return ok
-    else:
-        return True
-
-
-if prompt_sudo():
-    print("Access granted !")
-else:
-    print("Access denied !")
-    ErrorArg(3)
 
 
 def welcome():
@@ -136,42 +81,12 @@ def welcome():
     print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
     print('version: '+version)
     print("Press ESCAPE to exit, or just crash out with ctrl-c, whatever")
-    if not is_root(): 
-        if not debugmode: 
-            #ErrorArg(3)
-            prompt_sudo()
-
-
-def FileLineCount(ff):
-    count=0
-    try:
-        with open(ff,'rb') as tf:
-            for line in tf:
-                count = count + 1
-        tf.close()
-    except:
-        count=-1
-#    finally:
-    return count
-
-
-#depreciated since py3.9, 'cept i'm on 3.7
-def RemoveTrailingSlash(s):
-    if ((sys.version_info[0] == 3) and (sys.version_info[1] < 9)):    
-        if s.endswith('/'):
-            s = s[0:-1]
-    else:
-        s=s.removesuffix('/')    
-    return s    
-
-
-def HELP():
-    print("**something went wrong. I don't know what, so if you started with no parameters it probably means a file didn't exist or you ran as a normie rather than root\n")
-    print("auth.log file to scan            : -a, --authfile <filename>")
-    print("blocklist file with IPs          : -b, --blockfile <filename>")
-    print("number of attempts to block      : -f, --failcount <2>")
-    print("inifile with settings (not req.) : -i, --inifile <filename>")
-    print("local ip address range to ignore : -l, --localip <192.168.>")
+    
+    #don't bother to check for sudo/root for now.
+    #if not is_root(): 
+    #    if not debugmode: 
+    #        #ErrorArg(3)
+    #        prompt_sudo()
 
 
 def getArgs():
@@ -202,6 +117,7 @@ def getArgs():
     inifile = args.inifile
     if debugmode:
         authfile = StartDir+'\\auth.log'
+        blockfile = StartDir+'\\blocklist.txt'
     if authfile == '': ErrorArg(2)
     if blockfile == '': ErrorArg(2)
     if failcount < 1: ErrorArg(2)
@@ -342,10 +258,6 @@ def scanandcompare():
     return newblock
 
 
-def dtime(cmd):
-    cmd = float(cmd/1000)
-    time.sleep(cmd)
-    return
 
 #def key_capture_thread():
 #    global keep_going
@@ -389,7 +301,7 @@ def main():
         print("not linux, so going into debug mode")
         
     rebuild = False
-    StartDir = RemoveTrailingSlash(os.getcwd())
+    StartDir = os.getcwd().removesuffix('/')
 
     #listen_keyboard(on_press=press)
     welcome()
