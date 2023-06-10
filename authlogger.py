@@ -30,6 +30,8 @@
 from getpass import getpass
 import os, argparse, sys, io, time, subprocess
 from libby import *
+import signal #for ctrl-c detection
+
 #from sshkeyboard import listen_keyboard, stop_listening
 
 #import keyboard
@@ -49,7 +51,7 @@ class Block:
         self.ip = ip
         self.failcount = failcount
 
-
+signal.signal(signal.SIGINT, CloseGracefully)
         
 
 def ErrorArg(err):
@@ -212,13 +214,18 @@ def rebuildblockfile():
     print('done at '+time.ctime(timenow))
 
 
+def CloseGracefully(signal, frame):
+    #if ctrl-c is pressed, close iptables and exit
+    subprocess.call(['/sbin/iptables-save'])
+
+
 def AddNewIPToBlocklist(ip):
     #update iptables rules without clearing them all first
     print('adding: '+ip)
     if not debugmode:
         print('pushing ->'+ip)
         subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
-        subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit
+        #subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit, update, now done in CloseGracefully()
     else:
         print("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
     return
