@@ -17,13 +17,13 @@ class cBlock:
 aBlocklist = [] #array of cBlock objects
 
 def SaveBlockList():
-    print('saving blocklist (dump)')
+    #print('saving blocklist (dump)')
     #save the blocklist array to the blocklist file
     global blocklist
     global blockfile
-    for x in range(0, len(aBlocklist)):
-        for y in range(0, len(aBlocklist[x].datetime)):
-            print(aBlocklist[x].ip+' '+aBlocklist[x].datetime[y])
+    #for x in range(0, len(aBlocklist)):
+    #    for y in range(0, len(aBlocklist[x].datetime)):
+    #        print(aBlocklist[x].ip+' '+aBlocklist[x].datetime[y])
     print("---")
     print('saving blocklist')
     with open(blockfile, "wb") as fblockfile:
@@ -55,7 +55,8 @@ def AddNewIPToBlocklist(ip):
     global aBlocklist
     timeblocked = time.strftime('%Y%m%d%H%M%S', time.localtime(time.time()))
     #update iptables rules without clearing them all first
-    print('adding: '+ip)
+    ip=ip.strip()
+    print('adding: "'+ip+'"')
     aBlocklist.append(cBlock(ip=ip))
     aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
 
@@ -75,7 +76,7 @@ def main():
     global blockfile
     global oldblockfile
     blockfile = 'blockie.txt'
-    oldblockfile = 'blocklist.txt'
+    oldblockfile = 'old.txt'
 
     OpenBlockList()
     ReadOldBlocks()

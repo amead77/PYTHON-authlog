@@ -33,7 +33,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-11r4" #really need to update this every time I change something
+version = "2023-06-12r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
