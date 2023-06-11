@@ -31,6 +31,8 @@ from getpass import getpass
 import os, argparse, sys, io, time, subprocess
 from libby import *
 import signal #for ctrl-c detection
+import pickle #for saving blocklist
+import datetime #for timestamping#
 
 #from sshkeyboard import listen_keyboard, stop_listening
 
@@ -39,57 +41,34 @@ import signal #for ctrl-c detection
 
 debugmode = True
 
-version = "2023-06-01" #really need to update this every time I change something
+version = "2023-06-11" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 authlogModtime = 0 #time of last auth.log modification
-blocklistModtime = 0 #time of last blocklist modification
 
-class Block:
-    def __init__(self, datetime, ip, failcount):
-        self.datetime = datetime
+
+class cBlock:
+    def __init__(self, datetime=None, ip=None): #failcount not needed as count of datetime array will show failures
+        self.datetime = []
         self.ip = ip
-        self.failcount = failcount
 
-signal.signal(signal.SIGINT, CloseGracefully)
+    def add_datetime(self, datetime):
+        self.datetime.append(datetime)
+
+
+aBlocklist = [] #array of cBlock objects
+
+signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
         
-
-def ErrorArg(err):
-    match err:
-        case 0:
-            print("bye!")
-        case 1:
-            print("no worries, bye!")
-        case 2:
-            HELP()
-        case 3:
-            print("**NEEDS TO RUN AS (SUDO) ROOT, or it cannot access auth.log and set iptables rules")
-            HELP()
-        case _:
-            print("dunno, but bye!")
-
-    os.chdir(StartDir)
-    sys.exit(err)
-
-
 
 
 def welcome():
-    #if debugmode:
-    #    print("EUID: ", os.geteuid())
-    #    dtime(2000)
     print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
     print('Does some of what other, better, programs do, but worse!\n')
     print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
     print('version: '+version)
     print("Press ESCAPE to exit, or just crash out with ctrl-c, whatever")
     
-    #don't bother to check for sudo/root for now.
-    #if not is_root(): 
-    #    if not debugmode: 
-    #        #ErrorArg(3)
-    #        prompt_sudo()
-
 
 def getArgs():
     global blockfile
@@ -111,7 +90,7 @@ def getArgs():
     args = parser.parse_args()
 
 #inifile isn't used yet
-#failcount is ignored, currently always blocks on first failure
+#failcount is ignored, currently always aBlocklist on first failure
     blockfile = args.blockfile
     localip = args.localip
     authfile = args.authfile
@@ -119,13 +98,13 @@ def getArgs():
     inifile = args.inifile
     if debugmode:
         authfile = StartDir+'\\auth.log'
-        blockfile = StartDir+'\\blocklist.txt'
+        blockfile = StartDir+'\\blockie.txt'
     if authfile == '': ErrorArg(2)
     if blockfile == '': ErrorArg(2)
     if failcount < 1: ErrorArg(2)
     if localip == '': ErrorArg(2)
 
-    blockcount = FileLineCount(blockfile)
+    blockcount = FileLineCount(blockfile) #change this, no longer just a line per ip
 
     print('localip>'+localip)
     print('auth>'+authfile)
@@ -133,111 +112,71 @@ def getArgs():
     print('ini>'+args.inifile)
     
 
-def openblockfile():
-    global blockfile
-    global blocklist
-    global fblockfile
-    global authlogModtime
-    if (os.path.isfile(blockfile)):
-        authlogModtime = os.path.getmtime(authfile)
-        fblockfile = io.open(blockfile, 'rt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
-        blocklist=fblockfile.readlines()
-        for x in range(0, len(blocklist)):
-            blocklist[x]=blocklist[x].strip('\n')
-        #print(blocklist)
-        fblockfile.close()
 
-
-def openauthfile():
-    global authfile
-    global blocklist
-    global authstrings
-    fauthfile = None
-    #print('auth open')
-    if (os.path.isfile(authfile)):
-        try:
-            print('attempt auth open: ' + authfile)
-            fauthfile = io.open(authfile, 'rt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
-            authstrings=fauthfile.readlines()
-        except:
-            pass
-        finally:
-            if fauthfile is not None:
-                fauthfile.close
-                print('auth close: ' + authfile)
-            else:
-                print('cannot auth close: ' + authfile + ' probably not opened')
-        
-        for x in range(0, len(authstrings)):
-            authstrings[x]=authstrings[x].strip('\n')
-        #print(authstrings)
-
-
-def writeblockfile():
-    global blocklist
-    global blockfile
-    global fblockfile
-    if debugmode:
-        print('debug mode: not writing blockfile')
-        return
-    print('writing new blockfile')
-    fblockfile = io.open(blockfile, 'wt', buffering=1, encoding='utf-8', errors='ignore', newline='\n')
-    fblockfile.writelines("%s\n" % l for l in blocklist)
-    fblockfile.close
-    print('done')
-
-
-def rebuildblockfile():
-    #this is now only called once during startup, to populate the blocklist, further updates are done with AddNewIPToBlocklist()
-    global fblockfile
-    global blocklist
-    #blocklist.sort() #not needed, might make searching quicker but means last in isn't last block.
-    print('pushing new iptables rules')
-    if not debugmode:
-        #do i really want to flush beforehand? what if there are other rules?
-        subprocess.call(['/sbin/iptables', '--flush'])
-    for line in blocklist:
-        if not debugmode:
-            subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', line, '-j', 'DROP'])
-        else:
-            print("Rebuild/debug mode: iptables -I INPUT -s "+line+" -j DROP")
-            
-        print('pushing ->'+line)
-
-    print('Saving iptables rules')
-    if not debugmode:
-        subprocess.call(['/sbin/iptables-save'])
-    else:
-        print("debug mode: iptables-save")
-
-    timenow = time.time()
-    print('done at '+time.ctime(timenow))
 
 
 def CloseGracefully(signal, frame):
     #if ctrl-c is pressed, close iptables and exit
-    subprocess.call(['/sbin/iptables-save'])
+    if not debugmode:
+        print('closing...')
+        subprocess.call(['/sbin/iptables-save'])
+    ErrorArg(0)
 
 
-def AddNewIPToBlocklist(ip):
-    #update iptables rules without clearing them all first
-    print('adding: '+ip)
+def BlockIP(ip):
     if not debugmode:
         print('pushing ->'+ip)
         subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
         #subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit, update, now done in CloseGracefully()
     else:
         print("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
-    return
 
-def isIPinBlocklist(ip):
-    global blocklist
+
+def AddNewIPToBlocklist(ip, timeblocked):
+    global aBlocklist
+    #update iptables rules without clearing them all first
+    print('adding: '+ip)
+    aBlocklist.append(cBlock(ip=ip))
+    aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
+    if failcount == 1: #if failcount is 1, block on first failure
+        BlockIP(ip)
+
+
+def CheckBlocklist(ip, timeblocked):
+    #check to see if ip is already in blocklist
+    global aBlocklist
     foundit = False
-    for bline in blocklist:
-        if bline == ip:
-            foundit = True
-            break
-    return foundit
+    for x in range(0, len(aBlocklist)):
+        if aBlocklist[x].ip == ip:
+            for y in range(0, len(aBlocklist[x].datetime)):
+                if aBlocklist[x].datetime[y] != timeblocked:
+                    aBlocklist[x].datetime.append(timeblocked)
+                    foundit = True
+                    if len(aBlocklist[x].datetime) >= failcount: #check to see if this exceeds the failcount
+                        BlockIP(ip)
+                    break
+    if not foundit:
+        AddNewIPToBlocklist(ip, timeblocked)
+
+
+def GetDateTime(authstring):
+#    print("authlogModtime: " + str(authlogModtime))
+    #format authlogModtime as yyyy-mm-dd hh:mm:ss
+#    timey = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(authlogModtime))
+#    print("authlogModtime: " + str(timey))
+    #format authlogModtime as yyyymmddhhmmss but with leading zeros
+#    timey = str(time.strftime('%Y%m%d%H%M%S', time.localtime(authlogModtime)))
+#    print("authlogModtime: " + timey)
+    #print time now as yyyy-mm-dd hh:mm:ss
+#    print("time now: " + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())))
+    #assuming year is current year, convert: Jun  4 18:03:55 to yyyy-mm-dd hh:mm:ss
+    timey = time.strftime('%Y', time.localtime(time.time()))
+    
+    timey = time.strftime('%Y-%m-%d %H:%M:%S', time.strptime(timey+" "+authstring, "%Y %b %d %H:%M:%S"))
+    return timey
+#    print("timey: " + timey)
+
+
 
 def scanandcompare():
     global authstrings
@@ -294,51 +233,32 @@ def authModified():
     return authModified
 
 
+
 def main():
     global localip
     global StartDir
     global blockcount
     global blockfile
     global authfile
-    global blocklist
+
     global fblockfile
     global authstrings
     global inifile
+
     if not checkOSisLinux():
         print("not linux, so going into debug mode")
+        debugmode = True
         
     rebuild = False
     StartDir = os.getcwd().removesuffix('/')
 
-    #listen_keyboard(on_press=press)
     welcome()
     getArgs()
-    openblockfile()
-    rebuildblockfile()
-    x = 1
-    while True:
-#        try:        
-            x = x + 1
-            #keyboard doesn't work over ssh. just ctrl-c it instead :(
-    #        if keyboard.is_pressed('escape'):
-    #            print('exiting ...')
-    #            break        
+ 
 
-            if x == 10:
-                x = 1
-                if (authModified()):
-                    openauthfile()
-                    if scanandcompare():
-                        writeblockfile()
-            dtime(200) #rather than pause for 2 seconds, pause 10x 200ms, to prevent blocking.
-        
-            #lets not rebuild the blocklist every time we scan, just when we need to
-            #if rebuild:
-            #    rebuildblockfile()
-            #    rebuild = False
 
-#        except KeyboardInterrupt:
-#            break
+
+
 
     ErrorArg(0)
     #should never reach here
@@ -347,3 +267,39 @@ def main():
 if __name__ == '__main__':
     main()   
 
+
+
+        
+
+#def OpenAuthLogAsStream()
+    #open the auth.log file as a stream
+    #with the stream open, get a handle to it and read in data from it, on \n process received string from stream
+#import os
+#import time
+
+#    filename = 'auth.log'
+
+#    # Get the initial size of the file
+#    initial_size = os.stat(filename).st_size
+
+#    while True:
+#        # Check if the file size has changed
+#        if os.stat(filename).st_size > initial_size:
+#            with open(filename, 'r') as file:
+#                # Move the file pointer to the previous position
+#                file.seek(initial_size)
+#                # Read the new lines added to the file
+#                new_data = file.read()
+#                
+#                # Process the new lines
+#                lines = new_data.split('\n')
+#                for line in lines:
+#                    if 'error' in line:
+#                        # Perform your desired actions here
+#                        print("Found 'error' in line:", line)
+#                        
+#                # Update the initial size to the current size
+#                initial_size = os.stat(filename).st_size
+#        
+#        # Sleep for a short interval before checking again
+#        time.sleep(1)
