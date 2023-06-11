@@ -58,7 +58,6 @@ class cBlock:
 
 aBlocklist = [] #array of cBlock objects
 
-signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
         
 
 
@@ -71,19 +70,21 @@ def welcome():
     
 
 def getArgs():
+    print("getting args")
     global blockfile
     global authfile
     global blockcount
     global localip
     global failcount
     global inifile
-
+    global StartDir
+    global slash
     #failure = False
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
     parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+'/blocklist.txt')
-    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 1-currently ignored)', default=2)
+    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 1-currently ignored)', default=1)
     parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
     parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
     #parser.add_argument('-p', '--PassThru', dest='PassThru', action='store', help='parameters to pass to CMD', default='')
@@ -97,26 +98,29 @@ def getArgs():
     failcount = args.failcount
     inifile = args.inifile
     if debugmode:
-        authfile = StartDir+'\\auth.log'
-        blockfile = StartDir+'\\blockie.txt'
+        authfile = StartDir+slash+"auth.log"
+        blockfile = StartDir+slash+"blockie.txt"
     if authfile == '': ErrorArg(2)
     if blockfile == '': ErrorArg(2)
     if failcount < 1: ErrorArg(2)
     if localip == '': ErrorArg(2)
+    if not os.path.isfile(authfile): ErrorArg(0)
 
     blockcount = FileLineCount(blockfile) #change this, no longer just a line per ip
-
+    authlinecount = FileLineCount(authfile)
     print('localip>'+localip)
-    print('auth>'+authfile)
+    print('auth>'+authfile+' and contains: '+str(authlinecount)+' lines')
     print('block>'+blockfile+' and contains: '+str(blockcount)+' lines')
     print('ini>'+args.inifile)
-    
 
 
-
-
-def CloseGracefully(signal, frame):
-    #if ctrl-c is pressed, close iptables and exit
+def CloseGracefully(signal=None, frame=None):
+    print('closing...')
+    #if ctrl-c is pressed, save iptables and exit
+    global aBlocklist
+    global AuthFileHandle
+    AuthFileHandle.close()
+    SaveBlockList()
     if not debugmode:
         print('closing...')
         subprocess.call(['/sbin/iptables-save'])
@@ -131,6 +135,17 @@ def BlockIP(ip):
     else:
         print("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
 
+def FirstRunCheckBlocklist():
+    #if first run, check aBlocklist for failures and add them to iptables
+    print('checking blocklist/first run')
+    global aBlocklist
+    global failcount
+    for x in range(0, len(aBlocklist)):
+        #print(aBlocklist[x].ip+' '+str(len(aBlocklist[x].datetime)))
+        if len(aBlocklist[x].datetime) >= failcount:
+            BlockIP(aBlocklist[x].ip)
+            #print('blocking: '+aBlocklist[x].ip)
+
 
 def AddNewIPToBlocklist(ip, timeblocked):
     global aBlocklist
@@ -138,47 +153,40 @@ def AddNewIPToBlocklist(ip, timeblocked):
     print('adding: '+ip)
     aBlocklist.append(cBlock(ip=ip))
     aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
-    if failcount == 1: #if failcount is 1, block on first failure
-        BlockIP(ip)
 
 
 def CheckBlocklist(ip, timeblocked):
+    print('checking: '+ip)
     #check to see if ip is already in blocklist
     global aBlocklist
     foundit = False
     for x in range(0, len(aBlocklist)):
         if aBlocklist[x].ip == ip:
             for y in range(0, len(aBlocklist[x].datetime)):
-                if aBlocklist[x].datetime[y] != timeblocked:
-                    aBlocklist[x].datetime.append(timeblocked)
+                if aBlocklist[x].datetime[y] == timeblocked:
                     foundit = True
-                    if len(aBlocklist[x].datetime) >= failcount: #check to see if this exceeds the failcount
-                        BlockIP(ip)
                     break
+
+                    #aBlocklist[x].datetime.append(timeblocked)
+                    #foundit = True
+                    #if len(aBlocklist[x].datetime) >= failcount: #check to see if this exceeds the failcount
+                    #    BlockIP(ip)
+                    #break
     if not foundit:
         AddNewIPToBlocklist(ip, timeblocked)
+        if failcount == 1: #if failcount is 1, block on first failure
+            BlockIP(ip)
 
 
 def GetDateTime(authstring):
-#    print("authlogModtime: " + str(authlogModtime))
-    #format authlogModtime as yyyy-mm-dd hh:mm:ss
-#    timey = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(authlogModtime))
-#    print("authlogModtime: " + str(timey))
-    #format authlogModtime as yyyymmddhhmmss but with leading zeros
-#    timey = str(time.strftime('%Y%m%d%H%M%S', time.localtime(authlogModtime)))
-#    print("authlogModtime: " + timey)
-    #print time now as yyyy-mm-dd hh:mm:ss
-#    print("time now: " + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())))
-    #assuming year is current year, convert: Jun  4 18:03:55 to yyyy-mm-dd hh:mm:ss
+    #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
     timey = time.strftime('%Y', time.localtime(time.time()))
-    
-    timey = time.strftime('%Y-%m-%d %H:%M:%S', time.strptime(timey+" "+authstring, "%Y %b %d %H:%M:%S"))
+    timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
     return timey
-#    print("timey: " + timey)
 
 
 
-def scanandcompare():
+def scanandcompare(aline):
     global authstrings
     global blocklist
     global localip
@@ -186,20 +194,25 @@ def scanandcompare():
 
     newblock = False
     
-    for x in range(0, len(authstrings)):
-        aline = authstrings[x]
-        if (((aline.find('Failed password for',) >= 0) or (aline.find('Did not receive identification') >= 0)) and (aline.find(localip) < 0)):
-            tmp = aline.split(' ')
-            if aline.find('Failed') >= 0:
-                aline = tmp[len(tmp)-4]
-            else:
-                aline = tmp[len(tmp)-3]
-            foundit = isIPinBlocklist(aline)
-            if not foundit:            
-                print('adding: '+aline)
-                blocklist.append(aline)
-                newblock = True
-                AddNewIPToBlocklist(aline)
+    if (((aline.find('Failed password for',) >= 0) or (aline.find('Did not receive identification') >= 0)) and (aline.find(localip) < 0)):
+        tmp = aline.split(' ')
+        if aline.find('Failed') >= 0:
+            checkline = tmp[len(tmp)-4]
+        else:
+            checkline = tmp[len(tmp)-3]
+
+        #print("checkline: " + checkline)
+        #print("aline: " + str(aline))
+        #print("datetime: " + GetDateTime(aline))
+
+
+        CheckBlocklist(checkline, GetDateTime(aline))
+#            foundit = isIPinBlocklist(aline)
+#            if not foundit:            
+#                print('adding: '+aline)
+#                blocklist.append(aline)
+#                newblock = True
+#                AddNewIPToBlocklist(aline)
 
     return newblock
 
@@ -215,6 +228,7 @@ def press(key):
 #    if key == "escape":
 #        stop_listening()
 #        ErrorArg(0)
+
 
 def authModified():
     global authlogModtime
@@ -233,29 +247,109 @@ def authModified():
     return authModified
 
 
+def OpenBlockList():
+    print('opening blocklist')
+    #read in the blocklist file to aBlocklist array
+    global aBlocklist
+    global blockfile
+
+    #aBlocklist = [] #should be the first time this is called. / wasn't though was it
+
+    if (os.path.isfile(blockfile)):
+        try:
+            with open(blockfile, 'rb') as fblockfile:
+                aBlocklist = pickle.load(fblockfile)
+            fblockfile.close()
+            FirstRunCheckBlocklist()
+        except:
+            print('blocklist file is corrupt, will be overwritten on save')
+
+    else:
+        print('blocklist file not found, will be created on save')
+        
+
+
+def SaveBlockList():
+    print('saving blocklist (dump)')
+    #save the blocklist array to the blocklist file
+    global blocklist
+    global blockfile
+    for x in range(0, len(aBlocklist)):
+        for y in range(0, len(aBlocklist[x].datetime)):
+            print(aBlocklist[x].ip+' '+aBlocklist[x].datetime[y])
+    print("---")
+    print('saving blocklist')
+    with open(blockfile, "wb") as fblockfile:
+        pickle.dump(aBlocklist, fblockfile)
+    fblockfile.close()
+
+
+def OpenAuthLogAsStream():
+    print('opening auth.log as stream')
+    global authfile
+    global AuthPos
+    global AuthFileHandle
+    alogsize = os.stat(authfile).st_size
+    # Check if the file size has changed
+    with open(authfile, 'r') as AuthFileHandle: #gets closed in CloseGracefully()
+        while True:
+            if alogsize > AuthPos:
+                # Move the file pointer to the previous position
+                AuthFileHandle.seek(AuthPos)
+                # Read the new lines added to the file
+                new_data = AuthFileHandle.read()
+                
+                # Process the new lines
+                lines = new_data.split('\n')
+                for line in lines:
+                    scanandcompare(line)
+                        
+                # Update the initial size to the current size
+                AuthPos = alogsize
+            elif alogsize < AuthPos: #log was rotated
+                AuthPos = 0
+            time.sleep(1)
+
+
+
 
 def main():
+    
+    clear_screen()
+    
     global localip
     global StartDir
     global blockcount
     global blockfile
     global authfile
+    global debugmode
+    global AuthPos
+    global AuthFileHandle
+    AuthPos = 0
+    global slash
+    slash = '/'
+    signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
 
-    global fblockfile
-    global authstrings
-    global inifile
 
     if not checkOSisLinux():
         print("not linux, so going into debug mode")
+        slash = '\\'
         debugmode = True
         
     rebuild = False
-    StartDir = os.getcwd().removesuffix('/')
+    StartDir = os.getcwd().removesuffix(slash)
 
     welcome()
     getArgs()
- 
+    try:
+        OpenBlockList()
+        OpenAuthLogAsStream()
 
+    except:
+        print('error in main()')
+    finally:
+        CloseGracefully()
+        
 
 
 

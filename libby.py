@@ -14,6 +14,13 @@ def FileLineCount(ff):
     return count
 
 
+def clear_screen():
+    if os.name == 'nt':  # for Windows
+        os.system('cls')
+    else:  # for Unix/Linux/MacOS
+        os.system('clear')
+
+
 def ErrorArg(err):
     match err:
         case 0:
@@ -25,6 +32,8 @@ def ErrorArg(err):
         case 3:
             print("**NEEDS TO RUN AS (SUDO) ROOT, or it cannot access auth.log and set iptables rules")
             HELP()
+        case 4:
+            print("got stuck in a loop")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
