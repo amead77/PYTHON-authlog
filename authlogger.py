@@ -45,12 +45,12 @@ version = "2023-06-11r4" #really need to update this every time I change somethi
 #stdscr.nodelay(True)
 
 class cBlock:
-    def __init__(self, datetime=None, ip=None): #failcount not needed as count of datetime array will show failures
-        self.datetime = []
+    def __init__(self, vdatetime=None, ip=None): #failcount not needed as count of datetime array will show failures
+        self.vdatetime = []
         self.ip = ip
 
-    def add_datetime(self, datetime):
-        self.datetime.append(datetime)
+    def add_datetime(self, vdatetime):
+        self.vdatetime.append(vdatetime)
 
 
 aBlocklist = [] #array of cBlock objects
