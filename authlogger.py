@@ -34,6 +34,8 @@ import signal #for ctrl-c detection
 import pickle #for saving blocklist
 import datetime #for timestamping#
 import configparser #for reading ini file
+import select #for keyboard input (os stdin)
+import readchar #for keyboard input (readchar.readkey())
 
 #from sshkeyboard import listen_keyboard, stop_listening
 
@@ -56,7 +58,10 @@ class cBlock:
 
 aBlocklist = [] #array of cBlock objects
 
-        
+
+# Check if there is any input available
+def is_key_pressed():
+    return select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], [])
 
 
 def welcome():
@@ -295,6 +300,14 @@ def SaveBlockList():
     fblockfile.close()
 
 
+def GetKey():
+    #what key is it
+    key = readchar.readchar()
+    if key == '\x1b':
+        print("Escape key was pressed.")
+        CloseGracefully()
+
+
 def OpenAuthLogAsStream():
     print('opening auth.log as stream')
     global authfile
@@ -304,6 +317,8 @@ def OpenAuthLogAsStream():
     # Check if the file size has changed
     with open(authfile, 'r') as AuthFileHandle: #gets closed in CloseGracefully()
         while True:
+            if is_key_pressed:
+                GetKey()
             if alogsize > AuthPos:
                 # Move the file pointer to the previous position
                 AuthFileHandle.seek(AuthPos)
