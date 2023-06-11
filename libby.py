@@ -14,6 +14,23 @@ def FileLineCount(ff):
     return count
 
 
+def ErrorArg(err):
+    match err:
+        case 0:
+            print("bye!")
+        case 1:
+            print("no worries, bye!")
+        case 2:
+            HELP()
+        case 3:
+            print("**NEEDS TO RUN AS (SUDO) ROOT, or it cannot access auth.log and set iptables rules")
+            HELP()
+        case _:
+            print("dunno, but bye!")
+    sys.exit(err)
+
+
+
 def dtime(cmd):
     cmd = float(cmd/1000)
     time.sleep(cmd)
