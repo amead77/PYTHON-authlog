@@ -1,25 +1,13 @@
 #*todo
+# on ctrl-c, save iptables gets duplicated. error might be in try/except/finally block.
 #
-# failure count is ignored. implement*****
-# currently only blocks on first failure. need to implement a counter and block on x failures
-# --create record array: ip, fail count
-# --during scan increment fail count on every find
-# --at end of scan block based on failcount
-# --maybe also consider what is already in the blocklist
-# --check timestamp in auth.log to see if it's been modified since last scan and to ignore existing IPs in blocklist from earlier in the auth.log
 # keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
-# inifile isn't actually used or even written to
-# 
 #
 #*notes
 # literally too lazy to do anything else to this unless it breaks.
 # currently in use on my rpi because it's always connected and powered on.
 # at various points I've tried to implement keyboard input, but over shh (even with sshkeyboard)
 # it breaks.
-# Should now try to raise auth level if not sudo root. that bit of code i stole off the net
-# and can't remember where i got it from. If you recognise it and let me know, i'll link
-# credit to it.
-#
 #
 #'iptables -I INPUT -s '+slBlocklist.Strings[i]+' -j DROP'
 #
@@ -34,18 +22,27 @@ import signal #for ctrl-c detection
 import pickle #for saving blocklist
 import datetime #for timestamping#
 import configparser #for reading ini file
-import select #for keyboard input (os stdin)
-import readchar #for keyboard input (readchar.readkey())
+#import select #for keyboard input (os stdin)
+#import readchar #for keyboard input (readchar.readkey())
+#import curses #for keyboard input (curses.wrapper()) hopefully works over ssh
 
 #from sshkeyboard import listen_keyboard, stop_listening
 
 #import keyboard
 #from subprocess import call
 
-debugmode = True
+debugmode = False
 
-version = "2023-06-11r2" #really need to update this every time I change something
+version = "2023-06-11r4" #really need to update this every time I change something
 #2023-02-12 21:37:26
+
+# Initialize ncurses
+#stdscr = curses.initscr()
+#curses.noecho()
+#curses.cbreak()
+#stdscr.keypad(True)    
+# Set nodelay mode to enable non-blocking input
+#stdscr.nodelay(True)
 
 class cBlock:
     def __init__(self, datetime=None, ip=None): #failcount not needed as count of datetime array will show failures
@@ -59,10 +56,23 @@ class cBlock:
 aBlocklist = [] #array of cBlock objects
 
 
-# Check if there is any input available
-def is_key_pressed():
-    return select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], [])
+# Redefine the print function to include carriage return (for curses)
+#def print(*args, **kwargs):
+#    stdscr.addstr(*args, **kwargs)
+#    stdscr.refresh()
 
+
+# Check if there is any input available
+#def is_key_pressed():
+#    # Check for keyboard input
+#    key = stdscr.getch()
+#    # Process the key if it has a value
+#    if key != curses.ERR:
+#        return chr(key)
+#    else:
+#        return None
+#        # Handle other keypresses
+#        #print(f"You pressed: {chr(key)}")
 
 def welcome():
     print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
@@ -87,7 +97,7 @@ def getArgs():
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
     parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+'/blocklist.txt')
-    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=2)
+    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
     parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
     parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
     #parser.add_argument('-p', '--PassThru', dest='PassThru', action='store', help='parameters to pass to CMD', default='')
@@ -114,7 +124,7 @@ def getArgs():
 
     if debugmode:
         authfile = StartDir+slash+"auth.log"
-        blockfile = StartDir+slash+"blockie.txt"
+        #blockfile = StartDir+slash+"blockie.txt"
     if authfile == '': ErrorArg(2)
     if blockfile == '': ErrorArg(2)
     if failcount < 1: ErrorArg(2)
@@ -140,6 +150,11 @@ def CloseGracefully(signal=None, frame=None):
     if not debugmode:
         print('closing...')
         subprocess.call(['/sbin/iptables-save'])
+
+#    curses.nocbreak()
+#    stdscr.keypad(False)
+    #curses.echo()
+#    curses.endwin()
     ErrorArg(0)
 
 
@@ -153,14 +168,14 @@ def BlockIP(ip):
 
 def FirstRunCheckBlocklist():
     #if first run, check aBlocklist for failures and add them to iptables
-    print('checking blocklist/first run')
     global aBlocklist
     global failcount
+    print('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
         #print(aBlocklist[x].ip+' '+str(len(aBlocklist[x].datetime)))
         if len(aBlocklist[x].datetime) >= failcount:
             BlockIP(aBlocklist[x].ip)
-            #print('blocking: '+aBlocklist[x].ip)
+            #print('blocking: "'+aBlocklist[x].ip+'"')
 
 
 def AddNewIPToBlocklist(ip, timeblocked):
@@ -172,7 +187,7 @@ def AddNewIPToBlocklist(ip, timeblocked):
 
 
 def CheckBlocklist(ip, timeblocked):
-    print('checking: '+ip)
+    #print('checking: '+ip)
     #check to see if ip is already in blocklist
     global aBlocklist
     foundit = False
@@ -286,26 +301,26 @@ def OpenBlockList():
 
 
 def SaveBlockList():
-    print('saving blocklist (dump)')
+    #print('saving blocklist (dump)')
     #save the blocklist array to the blocklist file
     global blocklist
     global blockfile
-    for x in range(0, len(aBlocklist)):
-        for y in range(0, len(aBlocklist[x].datetime)):
-            print(aBlocklist[x].ip+' '+aBlocklist[x].datetime[y])
-    print("---")
+    #for x in range(0, len(aBlocklist)):
+    #    for y in range(0, len(aBlocklist[x].datetime)):
+    #        print(aBlocklist[x].ip+' '+aBlocklist[x].datetime[y])
+    #print("---")
     print('saving blocklist')
     with open(blockfile, "wb") as fblockfile:
         pickle.dump(aBlocklist, fblockfile)
     fblockfile.close()
 
 
-def GetKey():
+#def GetKey():
     #what key is it
-    key = readchar.readchar()
-    if key == '\x1b':
-        print("Escape key was pressed.")
-        CloseGracefully()
+#    key = readchar.readchar()
+#    if key == '\x1b':
+#        print("Escape key was pressed.")
+#        CloseGracefully()
 
 
 def OpenAuthLogAsStream():
@@ -317,8 +332,10 @@ def OpenAuthLogAsStream():
     # Check if the file size has changed
     with open(authfile, 'r') as AuthFileHandle: #gets closed in CloseGracefully()
         while True:
-            if is_key_pressed:
-                GetKey()
+            #key = is_key_pressed()
+            #if key == 'q':
+            #    print("Escape key was pressed.")
+            #    CloseGracefully()
             if alogsize > AuthPos:
                 # Move the file pointer to the previous position
                 AuthFileHandle.seek(AuthPos)
