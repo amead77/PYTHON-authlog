@@ -27,12 +27,13 @@
 # 2023-06-01 beginning to implement failcount, but not done yet
 #
 
-from getpass import getpass
+#from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate
 import os, argparse, sys, io, time, subprocess
 from libby import *
 import signal #for ctrl-c detection
 import pickle #for saving blocklist
 import datetime #for timestamping#
+import configparser #for reading ini file
 
 #from sshkeyboard import listen_keyboard, stop_listening
 
@@ -41,11 +42,8 @@ import datetime #for timestamping#
 
 debugmode = True
 
-version = "2023-06-11" #really need to update this every time I change something
+version = "2023-06-11r2" #really need to update this every time I change something
 #2023-02-12 21:37:26
-
-authlogModtime = 0 #time of last auth.log modification
-
 
 class cBlock:
     def __init__(self, datetime=None, ip=None): #failcount not needed as count of datetime array will show failures
@@ -80,23 +78,35 @@ def getArgs():
     global StartDir
     global slash
     #failure = False
-    
+    loadsettingsstatus = False
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
     parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+'/blocklist.txt')
-    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 1-currently ignored)', default=1)
+    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=2)
     parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
     parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
     #parser.add_argument('-p', '--PassThru', dest='PassThru', action='store', help='parameters to pass to CMD', default='')
     args = parser.parse_args()
 
-#inifile isn't used yet
-#failcount is ignored, currently always aBlocklist on first failure
-    blockfile = args.blockfile
-    localip = args.localip
-    authfile = args.authfile
-    failcount = args.failcount
+    #load the ini file before anything else, so it can be overwritten by command line args
     inifile = args.inifile
+    if inifile != '':
+        loadsettingsstatus = LoadSettings()
+
+    
+    
+    if (args.authfile != parser.get_default("authfile")) or (loadsettingsstatus == False):
+        authfile = args.authfile
+
+    if (args.blockfile != parser.get_default("blockfile")) or (loadsettingsstatus == False):
+        blockfile = args.blockfile
+    
+    if (args.localip != parser.get_default("localip")) or (loadsettingsstatus == False):
+        localip = args.localip
+
+    if (args.failcount != parser.get_default("failcount")) or (loadsettingsstatus == False):
+        failcount = args.failcount
+
     if debugmode:
         authfile = StartDir+slash+"auth.log"
         blockfile = StartDir+slash+"blockie.txt"
@@ -121,6 +131,7 @@ def CloseGracefully(signal=None, frame=None):
     global AuthFileHandle
     AuthFileHandle.close()
     SaveBlockList()
+    SaveSettings()
     if not debugmode:
         print('closing...')
         subprocess.call(['/sbin/iptables-save'])
@@ -311,6 +322,63 @@ def OpenAuthLogAsStream():
             time.sleep(1)
 
 
+def SaveSettings():
+    #save last settings to settings.ini
+    global localip
+    global blockfile
+    global authfile
+    global failcount
+    # Create a new configparser object
+    config = configparser.ConfigParser()
+
+    # Set some example settings
+    config['Settings'] = {
+        'localip': localip,
+        'blockfile': blockfile,
+        'authfile': authfile,
+        'failcount': failcount
+    }
+    # Save the settings to an INI file
+    try:
+        with open('settings.ini', 'w') as configfile:
+            config.write(configfile)
+        configfile.close()
+    except:
+        print('error saving settings.ini')
+            
+
+def LoadSettings():
+    # Load the settings from the INI file at startup, this will override the defaults, but not user set vars
+    global localip
+    global blockfile
+    global authfile
+    global failcount
+    rt = False
+    config = configparser.ConfigParser()
+    if  os.path.isfile('settings.ini'):
+        try:
+            config.read('settings.ini')
+
+            # Access the settings
+            localip = config['Settings']['localip']
+            blockfile = config['Settings']['blockfile']
+            authfile = config['Settings']['authfile']
+            failcount = config['Settings']['failcount']
+
+            # show me the settings
+            print("loaded settings.ini:")
+            print(f"localip: {localip}")
+            print(f"blockfile: {blockfile}")
+            print(f"authfile: {authfile}")
+            print(f"failcount: {failcount}")
+            rt = True
+        except:
+            print('error loading settings.ini')
+            rt = False
+    else:
+        print('settings.ini not found, using defaults')
+        rt = False
+    return rt
 
 
 def main():
