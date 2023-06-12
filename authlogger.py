@@ -395,7 +395,7 @@ def LoadSettings():
             localip = config['Settings']['localip']
             blockfile = config['Settings']['blockfile']
             authfile = config['Settings']['authfile']
-            failcount = config['Settings']['failcount']
+            failcount = int(config['Settings']['failcount'])
 
             # show me the settings
             print("loaded settings.ini:")
