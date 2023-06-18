@@ -33,7 +33,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-12r0" #really need to update this every time I change something
+version = "2023-06-18r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -96,7 +96,7 @@ def getArgs():
     loadsettingsstatus = False
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
-    parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+'/blocklist.txt')
+    parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
     parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
     parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
     parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
@@ -441,18 +441,14 @@ def main():
 
     welcome()
     getArgs()
-    try:
-        OpenBlockList()
-        OpenAuthLogAsStream()
-
-    except:
-        print('error in main()')
-    finally:
-        CloseGracefully()
-        
-
-
-
+    #no longer use try...except...finally, as it was causing issues with ctrl-c, errors should be caught in the functions
+    #try:
+    OpenBlockList()
+    OpenAuthLogAsStream()
+    #except:
+    print('error in main()')
+    #finally:
+    CloseGracefully()
 
     ErrorArg(0)
     #should never reach here
