@@ -1,17 +1,23 @@
 from getpass import getpass
 import os, argparse, sys, io, time, subprocess
-from libby import *
 import signal #for ctrl-c detection
 import pickle #for saving blocklist
 import datetime #for timestamping#
 
 class cBlock:
-    def __init__(self, datetime=None, ip=None): #failcount not needed as count of datetime array will show failures
-        self.datetime = []
+    def __init__(self, vdatetime=None, ip=None, reason = None): #failcount not needed as count of datetime array will show failures
+        self.vdatetime = []
         self.ip = ip
+        self.reason = []
+
+    def add_datetime(self, vdatetime):
+        self.vdatetime.append(vdatetime)
+
+    def add_reason(self, reason):
+        self.reason.append(reason)
 
     def add_datetime(self, datetime):
-        self.datetime.append(datetime)
+        self.vdatetime.append(datetime)
 
 
 aBlocklist = [] #array of cBlock objects
@@ -22,13 +28,14 @@ def SaveBlockList():
     global blocklist
     global blockfile
     #for x in range(0, len(aBlocklist)):
-    #    for y in range(0, len(aBlocklist[x].datetime)):
-    #        print(aBlocklist[x].ip+' '+aBlocklist[x].datetime[y])
+    #    for y in range(0, len(aBlocklist[x].vdatetime)):
+    #        print(aBlocklist[x].ip+' '+aBlocklist[x].vdatetime[y])
     print("---")
     print('saving blocklist')
     with open(blockfile, "wb") as fblockfile:
         pickle.dump(aBlocklist, fblockfile)
-    fblockfile.close()
+    #fblockfile.close()
+
 
 def OpenBlockList():
     print('opening blocklist')
@@ -42,7 +49,7 @@ def OpenBlockList():
         try:
             with open(blockfile, 'rb') as fblockfile:
                 aBlocklist = pickle.load(fblockfile)
-            fblockfile.close()
+            #fblockfile.close()
             
         except:
             print('blocklist file is corrupt, will be overwritten on save')
@@ -51,14 +58,38 @@ def OpenBlockList():
         print('blocklist file not found, will be created on save')
 
 
+def CheckBlocklist(ip, timeblocked):
+    #print('checking: '+ip)
+    #check to see if ip is already in blocklist
+    global aBlocklist
+    foundit = False
+    dtfound = -1
+    for x in range(0, len(aBlocklist)):
+        if aBlocklist[x].ip == ip:
+            dtfound = x
+            for y in range(0, len(aBlocklist[x].vdatetime)):
+                if aBlocklist[x].vdatetime[y] == timeblocked:
+                    foundit = True
+                    break
+
+    if not foundit:
+        if dtfound >= 0:
+            print('adding datetime: '+ip)
+            aBlocklist[dtfound].add_datetime(timeblocked)
+            aBlocklist[dtfound].add_reason('add datetime')
+        else:
+            print('adding: '+ip)
+            aBlocklist.append(cBlock(ip=ip))
+            aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
+            aBlocklist[len(aBlocklist)-1].add_reason('new ip [import_blocks]')
+
+
 def AddNewIPToBlocklist(ip):
     global aBlocklist
     timeblocked = time.strftime('%Y%m%d%H%M%S', time.localtime(time.time()))
     #update iptables rules without clearing them all first
     ip=ip.strip()
-    print('adding: "'+ip+'"')
-    aBlocklist.append(cBlock(ip=ip))
-    aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
+    CheckBlocklist(ip, timeblocked)
 
 
 def ReadOldBlocks():
@@ -69,13 +100,13 @@ def ReadOldBlocks():
     with open(oldblockfile, 'r') as fblockfile:
         for line in fblockfile:
             AddNewIPToBlocklist(line)
-    fblockfile.close()
+    #fblockfile.close()
 
 def main():
     global aBlocklist
     global blockfile
     global oldblockfile
-    blockfile = 'blockie.txt'
+    blockfile = 'blocklist.txt'
     oldblockfile = 'old.txt'
 
     OpenBlockList()
