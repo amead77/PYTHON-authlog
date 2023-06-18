@@ -12,7 +12,7 @@
 #'iptables -I INPUT -s '+slBlocklist.Strings[i]+' -j DROP'
 #
 # TODO:
-#   add reason string to cBlock, same method as add_datetime()
+#   nothing but cleaning
 #
 # change notes
 # 2023-06-01 beginning to implement failcount, but not done yet
