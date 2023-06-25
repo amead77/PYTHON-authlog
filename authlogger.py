@@ -17,6 +17,7 @@
 # change notes
 # 2023-06-01 beginning to implement failcount, but not done yet
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
+# 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
 
 #from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate
 import os, argparse, sys, io, time, subprocess
@@ -35,7 +36,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-18r0" #really need to update this every time I change something
+version = "2023-06-25r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -84,6 +85,8 @@ def ErrorArg(err):
             HELP()
         case 4:
             print("got stuck in a loop")
+        case 5:
+            print("unable to create or write to logfile")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -118,7 +121,7 @@ def welcome():
     
 
 def getArgs():
-    print("getting args")
+    LogData("getting args")
     global blockfile
     global authfile
     global blockcount
@@ -166,34 +169,33 @@ def getArgs():
 
     #blockcount = FileLineCount(blockfile) #change this, no longer just a line per ip
     #authlinecount = FileLineCount(authfile)
-    print('localip>'+localip)
-    print('auth>'+authfile)
-    print('block>'+blockfile)
-    print('ini>'+args.inifile)
-    print('failcount>'+str(failcount))
+    LogData('localip>'+localip)
+    LogData('auth>'+authfile)
+    LogData('block>'+blockfile)
+    LogData('ini>'+args.inifile)
+    LogData('failcount>'+str(failcount))
 
 
 def PrintBlockList():
     global aBlocklist
-    print('printing blocklist')
+    LogData('printing blocklist')
     for i in range(len(aBlocklist)):
-        print(aBlocklist[i].ip+':')
+        LogData(aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].vdatetime)):
-            print('-->'+ReverseDateTime(aBlocklist[i].vdatetime[x]))
+            LogData('-->'+ReverseDateTime(aBlocklist[i].vdatetime[x]))
 
 
 def CloseGracefully(signal=None, frame=None):
-    print('closing...')
+    LogData('closing...')
     #if ctrl-c is pressed, save iptables and exit
     global aBlocklist
     global AuthFileHandle
     #AuthFileHandle.close() #not requred, as with statement closes it automatically
     SaveBlockList()
     SaveSettings()
+    CloseLogFile()
     if not debugmode:
-        print('closing...')
         subprocess.call(['/sbin/iptables-save'])
-
     ErrorArg(0)
 
 
@@ -203,24 +205,24 @@ def BlockIP(ip):
 
     #check if already blocked
     if ip in aActiveBlocklist:
-        print('already blocked: '+ip)
+        LogData('already blocked: '+ip)
         return
     else:
         if not debugmode:
             aActiveBlocklist.append(ip)
-            print('Passing to IPTables ->'+ip)
+            LogData('Passing to IPTables ->'+ip)
             subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
             #subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit, update, now done in CloseGracefully()
         else:
             aActiveBlocklist.append(ip)
-            print("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
+            LogData("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
 
 
 def FirstRunCheckBlocklist():
     #if first run, check aBlocklist for failures and add them to iptables
     global aBlocklist
     global failcount
-    print('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
+    LogData('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
         if len(aBlocklist[x].vdatetime) >= failcount:
             #print('len(aBlocklist[x].vdatetime) '+str(len(aBlocklist[x].vdatetime)))
@@ -244,13 +246,13 @@ def CheckBlocklist(ip, timeblocked, reason):
 
     if not foundit:
         if dtfound >= 0:
-            print('adding datetime: '+ip+' ['+reason+']')
+            LogData('adding datetime: '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
             if len(aBlocklist[dtfound].vdatetime) >= failcount:
                 BlockIP(ip)
         else:
-            print('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
+            LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
@@ -273,12 +275,12 @@ def ReverseDateTime(authstring):
 def ClearIPTables():
     #clear all iptables rules
     if not debugmode:
-        print('clearing iptables')
+        LogData('clearing iptables')
         subprocess.call(['/sbin/iptables', '-F'])
         subprocess.call(['/sbin/iptables-save'])
-        print('done')
+        LogData('done')
     else:
-        print("CLEAR/debug mode: iptables -F")
+        LogData("CLEAR/debug mode: iptables -F")
 
 
 def scanandcompare(aline):
@@ -310,14 +312,15 @@ def authModified():
             authlogModtime = os.path.getmtime(authfile)
             authModified = True
     else:
-        print('auth.log file not found')
+        LogData('auth.log file not found')
         ErrorArg(2)
 
     return authModified
 
 
 def OpenBlockList():
-    print('opening blocklist')
+    #print('opening blocklist')
+    LogData('opening blocklist')
     #read in the blocklist file to aBlocklist array
     global aBlocklist
     global blockfile
@@ -330,10 +333,11 @@ def OpenBlockList():
                 aBlocklist = pickle.load(fblockfile)
             #fblockfile.close() not required with 'with'
         except:
-            print('blocklist file is corrupt, will be overwritten on save')
+            #print('blocklist file is corrupt, will be overwritten on save')
+            LogData('blocklist file is corrupt, will be overwritten on save')
 
     else:
-        print('blocklist file not found, will be created on save')
+        LogData('blocklist file not found, will be created on save')
     FirstRunCheckBlocklist()
         
 
@@ -343,21 +347,27 @@ def SaveBlockList():
     global blocklist
     global blockfile
 
-    print('saving blocklist')
+    LogData('saving blocklist')
     with open(blockfile, "wb") as fblockfile:
         pickle.dump(aBlocklist, fblockfile)
     #fblockfile.close() not required with 'with'
 
 
 def OpenAuthLogAsStream():
-    print('opening auth.log as stream')
+    LogData('opening auth.log as stream')
     global authfile
     global AuthPos
     global AuthFileHandle
+    iFlush = 0
     alogsize = os.stat(authfile).st_size
     # Check if the file size has changed
     with open(authfile, 'r') as AuthFileHandle: #gets closed in CloseGracefully()
         while True:
+            iFlush += 1
+            if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
+                iFlush = 0
+                FlushLogFile()
+
             #key = is_key_pressed()
             #if key == 'q':
             #    print("Escape key was pressed.")
@@ -402,7 +412,7 @@ def SaveSettings():
             config.write(configfile)
         configfile.close()
     except:
-        print('error saving settings.ini')
+        LogData('error saving settings.ini')
             
 
 def LoadSettings():
@@ -424,19 +434,58 @@ def LoadSettings():
             failcount = int(config['Settings']['failcount'])
 
             # show me the settings
-            print("loaded settings.ini:")
-            print(f"localip: {localip}")
-            print(f"blockfile: {blockfile}")
-            print(f"authfile: {authfile}")
-            print(f"failcount: {failcount}")
+            LogData("loaded settings.ini:")
+            LogData(f"localip: {localip}")
+            LogData(f"blockfile: {blockfile}")
+            LogData(f"authfile: {authfile}")
+            LogData(f"failcount: {failcount}")
             rt = True
         except:
-            print('error loading settings.ini')
+            LogData('error loading settings.ini')
             rt = False
     else:
-        print('settings.ini not found, using defaults')
+        LogData('settings.ini not found, using defaults')
         rt = False
     return rt
+
+
+def OpenLogFile():
+    global logfile
+    global logFileHandle
+    global slash
+    
+    if not os.path.isdir(StartDir + slash + 'logs'):
+        os.mkdir(StartDir + slash + 'logs')
+    logfile = StartDir + slash + 'logs' + slash + 'authlogger.log'
+    try:
+        logFileHandle = open(logfile, 'a')
+    except:
+        print('error opening logfile')
+        ErrorArg(5)
+    logFileHandle.write('authlogger started.\n')
+
+
+def LogData(sdata):
+    #write timestamp+sdata to logfile, then flush to disk
+    global logFileHandle
+    print(sdata)
+    logFileHandle.write(TimeStamp()+'--'+sdata + '\n')
+    #logFileHandle.flush()
+
+
+def TimeStamp():
+    return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+
+def CloseLogFile():
+    global logFileHandle
+
+    LogData('authlogger stopped.\n')
+    logFileHandle.close()
+
+
+def FlushLogFile():
+    global logFileHandle
+    logFileHandle.flush()
 
 
 def main():
@@ -451,6 +500,7 @@ def main():
     global debugmode
     global AuthPos
     global AuthFileHandle
+    global logfile
     AuthPos = 0
     global slash
     slash = '/'
@@ -458,13 +508,13 @@ def main():
 
 
     if not checkOSisLinux():
-        print("not linux, so going into debug mode")
+        LogData("not linux, so going into debug mode")
         slash = '\\'
         debugmode = True
         
     rebuild = False
     StartDir = os.getcwd().removesuffix(slash)
-
+    OpenLogFile()
     welcome()
     getArgs()
     time.sleep(3)
