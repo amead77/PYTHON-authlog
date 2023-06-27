@@ -1,34 +1,57 @@
-# Notes:
-# Requires Python >= 3.10 due to match case.
-#
+####################### [ About ] #######################
 # This is a simple script to monitor the auth.log file for failed login attempts and block the IP address
 # if the number of failed attempts is >= failcount.
 #
-# currently in use on my rpi because it's always connected and powered on.
+# currently in use on my RPi because it's always connected and powered on. Every day people try to log in.
 # at various points I've tried to implement keyboard input, but over shh (even with sshkeyboard)
 # it breaks. curses can suck my dick as that solves one problem by introducing another.
 #
+# This came about because I didn't want to learn Fail2ban and wanted a real project to learn Python better.
+# I am sure fail2ban is much more feature full and whatnot, but I didn't want a client-server setup, just
+# a simple press-and-go script.
+# Anyway, this does what I need it to do, keep out the bots trying default/popular passwords.
+#
 # the actual firewall rule setting is: 'iptables -I INPUT -s <IP> -j DROP'
 #
-# TODO:
-#   BUG: ini file is loaded and unloaded to settings.ini without user intervention and ignores the -i arg.
-#        this is because I was testing configparser and forgot about it until just now (2023-06-27)
-#   FIXME: keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
+
+####################### [ Requirements ] #######################
+
+# Initially it only needs a few things.
+# 1. The auth.log file, either in the default location or specified on command line.
+# 2. this file, run as sudo root.
+# 3. iptables installed and running. (probably already installed on most linux distros)
+# 4. oh, and Linux. You can test some of the code on Windows, but it won't actually do anything.
+# 5. tmux or screen is recommended so you can run it in the background and detach the session.
+#    I run it in a tmux session on my RPi, and I can ssh in and check the status of anytime I want by
+#    attaching to the tmux session. Or I can look at the logfile from anywhere.
+# 6. Python >= 3.10 due to match case.
 #
-# change notes
+
+####################### [ To Do ] #######################
+#
+# TODO:
+#   BUG:    ini file is loaded and unloaded to settings.ini without user intervention and ignores the -i arg.
+#           this is because I was testing configparser and forgot about it until just now (2023-06-27)
+#   FIXME:  keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
+#   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
+#           just add a -v --verbose mode
+#   CHANGE: maybe do the same to logging, logfile could end up hueg.
+
+####################### [ Changes ] #######################
+# earlier wasn't noted... in fact I rarely noted changes, I really should.
 # 2023-06-01 beginning to implement failcount, but not done yet
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
 # 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
 # 2023-06-27 added comments, changed some wording.
 #
-#
-#
-# How this works:
-# Reads /var/log/auth.log file, parses it very simply, creates a array of IP addresses along with the datetime
-# that they failed login.
+
+####################### [ How this works ] #######################
+# Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
+# the datetime that they failed login.
 # If the number of datetime entries is >= failcount, then send to IPTables to add to firewall rules.
 #
-#
+
+####################### [ Code order ] #######################
 # in simple terms the main order of code is:
 # Create cBlock class, used as a record/struct
 # create aBlocklist[] which becomes and array of cBlock class
@@ -53,8 +76,22 @@
 #      BlockIP() sends the IP to iptables to be blocked, and adds the IP to aActiveBlocklist[] to keep track of what is currently blocked
 #      #if Ctrl-C is detected, jump to: CloseGracefully()
 # CloseGracefully() to close the auth.log stream and save the blocklist to file
+#   SaveBlocklist() to save the blocklist aBlocklist[] to file
+#   SaveSettings() to save the settings to ini file
+#   CloseLogFile() to close the log file
+#   assuming not in debug mode, save IPTables rules
+#   ErrorArg()
+# ErrorArg() to print error/exit message and exit
+#
 
+####################### [ Coding Style ] #######################
+# I literally write this using camel case, snake case, pascal case, and whatever else I feel like at the time.
+# I will try to adjust it for consistency.
+#
 
+#########################################################
+####################### [ Setup ] #######################
+#########################################################
 #from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate, as it's annoying
 import os, argparse, sys, io, time, subprocess
 import signal #for ctrl-c detection
@@ -98,10 +135,14 @@ class cBlock:
 aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
 
-##########################################################################################################################
+#############################################################
+####################### [ Functions ] #######################
+#############################################################
+
 
 #######################
 def clear_screen():
+    #literally ask the OS to clear the screen
     if os.name == 'nt':  # for Windows
         os.system('cls')
     else:  # for Unix/Linux/MacOS
@@ -110,6 +151,7 @@ def clear_screen():
 
 #######################
 def ErrorArg(err):
+    #prints the error message and exits with the error code
     match err:
         case 0:
             print("bye!")
@@ -223,7 +265,7 @@ def PrintBlockList():
     for i in range(len(aBlocklist)):
         LogData(aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].vdatetime)):
-            LogData('-->'+ReverseDateTime(aBlocklist[i].vdatetime[x]))
+            LogData('-->'+ReverseDateTime(aBlocklist[i].vdatetime[x])+" reason: "+aBlocklist[i].vreason[x])
 
 
 #######################
@@ -547,7 +589,9 @@ def FlushLogFile():
     logFileHandle.flush()
 
 
+########################################################
 ####################### [ MAIN ] #######################
+########################################################
 def main():
     
     clear_screen()
