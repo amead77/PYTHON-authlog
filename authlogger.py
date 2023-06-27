@@ -44,7 +44,7 @@
 # 2023-06-01 beginning to implement failcount, but not done yet
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
 # 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
-# 2023-06-27 added comments, changed some wording.
+# 2023-06-27 FIXED: not blocking new IPs, checking auth.log size changes was outside the loop, oops.
 #
 
 ####################### [ How this works ] #######################
@@ -59,12 +59,12 @@
 # create aBlocklist[] which becomes and array of cBlock class
 # create aActiveBlocklist[] which is an array of IP addresses that are actually blocked.
 # main() which is at the bottom
-#   clear_screen()
+#   ClearScreen()
 #   set ctrl-c detection
 #   set global variables and check if running on linux, if not go into debug mode (doesn't actually send to iptables in debug mode)
 #   OpenLogFile() to initialise the log file for sending data to (also prints to screen on logging)
-#   welcome() to show welcome text, duh..
-#   getArgs() to get command line arguments, override ini settings if ini specified on cmd line plus other arguments
+#   Welcome() to show welcome text, duh..
+#   GetArgs() to get command line arguments, override ini settings if ini specified on cmd line plus other arguments
 #   ClearIPTables() to clear out IPTables rules before setting any new ones
 #   OpenBlocklist() to load the blocklist file into memory
 #     FirstRunCheckBlocklist() to block any IPs already in the blocklist file if the number of datetime entries is >= failcount
@@ -111,7 +111,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-27r0" #really need to update this every time I change something
+version = "2023-06-27r1" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -143,7 +143,7 @@ aActiveBlocklist = [] #array of ip addresses
 
 
 #######################
-def clear_screen():
+def ClearScreen():
     #literally ask the OS to clear the screen
     if os.name == 'nt':  # for Windows
         os.system('cls')
@@ -160,10 +160,10 @@ def ErrorArg(err):
         case 1:
             print("no worries, bye!")
         case 2:
-            HELP()
+            Help()
         case 3:
             print("**NEEDS TO RUN AS (SUDO) ROOT, or it cannot access auth.log and set iptables rules")
-            HELP()
+            Help()
         case 4:
             print("got stuck in a loop")
         case 5:
@@ -174,7 +174,7 @@ def ErrorArg(err):
 
 
 #######################
-def checkOSisLinux():
+def CheckIsLinux():
     #this is because it is designed to run on Linux, but I also code on Windows, in which case I don't want it to run all the code
     if not sys.platform.startswith('linux'):
         debugmode = True
@@ -184,7 +184,7 @@ def checkOSisLinux():
 
 
 #######################
-def HELP():
+def Help():
     print("**something went wrong. I don't know what, so if you started with no parameters it probably means a file didn't exist or you ran as a normie rather than root\n")
     print("auth.log file to scan            : -a, --authfile <filename>")
     print("blocklist file with IPs          : -b, --blockfile <filename>")
@@ -195,7 +195,7 @@ def HELP():
 
 
 #######################
-def welcome():
+def Welcome():
     print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
     print('Does some of what other, better, programs do, but worse!\n')
     print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
@@ -204,7 +204,7 @@ def welcome():
     
 
 #######################
-def getArgs():
+def GetArgs():
     LogData("getting args")
     global blockfile
     global authfile
@@ -597,7 +597,7 @@ def FlushLogFile():
 ########################################################
 def main():
     
-    clear_screen()
+    ClearScreen()
     
     global localip
     global StartDir
@@ -614,7 +614,7 @@ def main():
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
 
 
-    if not checkOSisLinux():
+    if not CheckIsLinux():
         LogData("not linux, so going into debug mode")
         slash = '\\'
         debugmode = True
@@ -622,8 +622,8 @@ def main():
     rebuild = False
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
-    welcome()
-    getArgs()
+    Welcome()
+    GetArgs()
     time.sleep(3)
     ClearIPTables()
     #no longer use try...except...finally, as it was causing issues with ctrl-c, errors should be caught in the functions
