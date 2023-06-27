@@ -569,7 +569,7 @@ def OpenLogFile():
 def LogData(sdata):
     #write timestamp+sdata to logfile, then flush to disk
     global logFileHandle
-    print(sdata)
+    print(TimeStamp()+'--'+sdata)
     logFileHandle.write(TimeStamp()+'--'+sdata + '\n')
     #logFileHandle.flush()
 
