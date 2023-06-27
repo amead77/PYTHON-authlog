@@ -1,25 +1,61 @@
-#*todo
-# on ctrl-c, save iptables gets duplicated. error might be in try/except/finally block.
+# Notes:
+# Requires Python >= 3.10 due to match case.
 #
-# keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
+# This is a simple script to monitor the auth.log file for failed login attempts and block the IP address
+# if the number of failed attempts is >= failcount.
 #
-#*notes
-# literally too lazy to do anything else to this unless it breaks.
 # currently in use on my rpi because it's always connected and powered on.
 # at various points I've tried to implement keyboard input, but over shh (even with sshkeyboard)
-# it breaks. curses can suck my dick.
+# it breaks. curses can suck my dick as that solves one problem by introducing another.
 #
-#'iptables -I INPUT -s '+slBlocklist.Strings[i]+' -j DROP'
+# the actual firewall rule setting is: 'iptables -I INPUT -s <IP> -j DROP'
 #
 # TODO:
-#   nothing but cleaning
+#   BUG: ini file is loaded and unloaded to settings.ini without user intervention and ignores the -i arg.
+#        this is because I was testing configparser and forgot about it until just now (2023-06-27)
+#   FIXME: keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
 #
 # change notes
 # 2023-06-01 beginning to implement failcount, but not done yet
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
 # 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
+# 2023-06-27 added comments, changed some wording.
+#
+#
+#
+# How this works:
+# Reads /var/log/auth.log file, parses it very simply, creates a array of IP addresses along with the datetime
+# that they failed login.
+# If the number of datetime entries is >= failcount, then send to IPTables to add to firewall rules.
+#
+#
+# in simple terms the main order of code is:
+# Create cBlock class, used as a record/struct
+# create aBlocklist[] which becomes and array of cBlock class
+# create aActiveBlocklist[] which is an array of IP addresses that are actually blocked.
+# main() which is at the bottom
+#   clear_screen()
+#   set ctrl-c detection
+#   set global variables and check if running on linux, if not go into debug mode (doesn't actually send to iptables in debug mode)
+#   OpenLogFile() to initialise the log file for sending data to (also prints to screen on logging)
+#   welcome() to show welcome text, duh..
+#   getArgs() to get command line arguments, override ini settings if ini specified on cmd line plus other arguments
+#   ClearIPTables() to clear out IPTables rules before setting any new ones
+#   OpenBlocklist() to load the blocklist file into memory
+#     FirstRunCheckBlocklist() to block any IPs already in the blocklist file if the number of datetime entries is >= failcount
+#   PrintBlockList() to print the current blocklist to screen and log file
+#   OpenAuthLogAsStream() to open the auth.log file as a stream, once opened stay in this function until ctrl-c
+#      #Every time authlog gets new data, split it into lines and process each line by sending to scanandcompare()
+#      #scanandcompare() checks if the line is a failed login attempt, if it is, it sends the IP to CheckBlocklist()
+#    CheckBlocklist() checks if the IP is already in the blocklist aBlocklist[], if yes and unique, it adds the datetime to the cBlock object, else
+#      #if the IP is not in the blocklist, it adds the IP to the aBlocklist[].
+#      #if the number of datetime entries in the cBlock object of aBlocklist[] is >= failcount, it sends the IP to BlockIP()
+#      BlockIP() sends the IP to iptables to be blocked, and adds the IP to aActiveBlocklist[] to keep track of what is currently blocked
+#      #if Ctrl-C is detected, jump to: CloseGracefully()
+# CloseGracefully() to close the auth.log stream and save the blocklist to file
 
-#from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate
+
+#from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate, as it's annoying
 import os, argparse, sys, io, time, subprocess
 import signal #for ctrl-c detection
 import pickle #for saving blocklist
@@ -36,7 +72,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-25r0" #really need to update this every time I change something
+version = "2023-06-27r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -64,7 +100,7 @@ aActiveBlocklist = [] #array of ip addresses
 
 ##########################################################################################################################
 
-
+#######################
 def clear_screen():
     if os.name == 'nt':  # for Windows
         os.system('cls')
@@ -72,6 +108,7 @@ def clear_screen():
         os.system('clear')
 
 
+#######################
 def ErrorArg(err):
     match err:
         case 0:
@@ -92,6 +129,7 @@ def ErrorArg(err):
     sys.exit(err)
 
 
+#######################
 def checkOSisLinux():
     #this is because it is designed to run on Linux, but I also code on Windows, in which case I don't want it to run all the code
     if not sys.platform.startswith('linux'):
@@ -101,6 +139,7 @@ def checkOSisLinux():
         return True
 
 
+#######################
 def HELP():
     print("**something went wrong. I don't know what, so if you started with no parameters it probably means a file didn't exist or you ran as a normie rather than root\n")
     print("auth.log file to scan            : -a, --authfile <filename>")
@@ -111,15 +150,16 @@ def HELP():
     print("Remember: must run as sudo/root or it cannot block IPs\n")
 
 
-
+#######################
 def welcome():
     print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
     print('Does some of what other, better, programs do, but worse!\n')
     print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
     print('version: '+version)
-    print("Press ESCAPE to exit, or just crash out with ctrl-c, whatever")
+    print("To exit just crash out with ctrl-c, keyboard control over ssh is iffy.")
     
 
+#######################
 def getArgs():
     LogData("getting args")
     global blockfile
@@ -176,6 +216,7 @@ def getArgs():
     LogData('failcount>'+str(failcount))
 
 
+#######################
 def PrintBlockList():
     global aBlocklist
     LogData('printing blocklist')
@@ -185,6 +226,7 @@ def PrintBlockList():
             LogData('-->'+ReverseDateTime(aBlocklist[i].vdatetime[x]))
 
 
+#######################
 def CloseGracefully(signal=None, frame=None):
     LogData('closing...')
     #if ctrl-c is pressed, save iptables and exit
@@ -199,7 +241,9 @@ def CloseGracefully(signal=None, frame=None):
     ErrorArg(0)
 
 
+#######################
 def BlockIP(ip):
+    #the part that actually blocks the IP by sending details to iptables
     global debugmode
     global aActiveBlocklist
 
@@ -218,6 +262,7 @@ def BlockIP(ip):
             LogData("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
 
 
+#######################
 def FirstRunCheckBlocklist():
     #if first run, check aBlocklist for failures and add them to iptables
     global aBlocklist
@@ -230,6 +275,7 @@ def FirstRunCheckBlocklist():
             #print('blocking: "'+aBlocklist[x].ip+'"')
 
 
+#######################
 def CheckBlocklist(ip, timeblocked, reason):
     #print('checking: '+ip)
     #check to see if ip is already in blocklist
@@ -260,18 +306,22 @@ def CheckBlocklist(ip, timeblocked, reason):
                 BlockIP(ip)
         
 
-
+#######################
 def GetDateTime(authstring):
     #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
     timey = time.strftime('%Y', time.localtime(time.time()))
     timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
     return timey
 
+
+#######################
 def ReverseDateTime(authstring):
     #get the date and time in the format YYYYMMDDHHMMSS and convert to YYYY-MM-DD HH:MM:SS
     timey = time.strftime('%Y-%m-%d %H:%M:%S', time.strptime(authstring, "%Y%m%d%H%M%S"))
     return timey
 
+
+#######################
 def ClearIPTables():
     #clear all iptables rules
     if not debugmode:
@@ -283,6 +333,7 @@ def ClearIPTables():
         LogData("CLEAR/debug mode: iptables -F")
 
 
+#######################
 def scanandcompare(aline):
     global authstrings
     global blocklist
@@ -301,6 +352,7 @@ def scanandcompare(aline):
         CheckBlocklist(checkline, GetDateTime(aline), aline[16:])
 
 
+#######################
 def authModified():
     global authlogModtime
     global authfile
@@ -318,6 +370,7 @@ def authModified():
     return authModified
 
 
+#######################
 def OpenBlockList():
     #print('opening blocklist')
     LogData('opening blocklist')
@@ -341,6 +394,7 @@ def OpenBlockList():
     FirstRunCheckBlocklist()
         
 
+#######################
 def SaveBlockList():
     #print('saving blocklist (dump)')
     #save the blocklist array to the blocklist file
@@ -353,6 +407,7 @@ def SaveBlockList():
     #fblockfile.close() not required with 'with'
 
 
+#######################
 def OpenAuthLogAsStream():
     LogData('opening auth.log as stream')
     global authfile
@@ -390,6 +445,7 @@ def OpenAuthLogAsStream():
             time.sleep(1)
 
 
+#######################
 def SaveSettings():
     #save last settings to settings.ini
     global localip
@@ -398,7 +454,6 @@ def SaveSettings():
     global failcount
     # Create a new configparser object
     config = configparser.ConfigParser()
-
     # Set some example settings
     config['Settings'] = {
         'localip': localip,
@@ -415,6 +470,7 @@ def SaveSettings():
         LogData('error saving settings.ini')
             
 
+#######################
 def LoadSettings():
     # Load the settings from the INI file at startup, this will override the defaults, but not user set vars
     global localip
@@ -426,7 +482,6 @@ def LoadSettings():
     if  os.path.isfile('settings.ini'):
         try:
             config.read('settings.ini')
-
             # Access the settings
             localip = config['Settings']['localip']
             blockfile = config['Settings']['blockfile']
@@ -449,11 +504,11 @@ def LoadSettings():
     return rt
 
 
+#######################
 def OpenLogFile():
     global logfile
     global logFileHandle
     global slash
-    
     if not os.path.isdir(StartDir + slash + 'logs'):
         os.mkdir(StartDir + slash + 'logs')
     logfile = StartDir + slash + 'logs' + slash + 'authlogger.log'
@@ -465,6 +520,7 @@ def OpenLogFile():
     logFileHandle.write('authlogger started.\n')
 
 
+#######################
 def LogData(sdata):
     #write timestamp+sdata to logfile, then flush to disk
     global logFileHandle
@@ -473,21 +529,25 @@ def LogData(sdata):
     #logFileHandle.flush()
 
 
+#######################
 def TimeStamp():
     return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
 
+
+#######################
 def CloseLogFile():
     global logFileHandle
-
     LogData('authlogger stopped.\n')
     logFileHandle.close()
 
 
+#######################
 def FlushLogFile():
     global logFileHandle
     logFileHandle.flush()
 
 
+####################### [ MAIN ] #######################
 def main():
     
     clear_screen()
@@ -527,10 +587,10 @@ def main():
     #except:
         #print('error in main()')
     #finally:
-    CloseGracefully()
 
+    #should never reach here due to ctrl-c detection
+    CloseGracefully()
     ErrorArg(0)
-    #should never reach here
     sys.exit(255)
 
 if __name__ == '__main__':
