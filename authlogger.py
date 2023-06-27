@@ -36,7 +36,9 @@
 #   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
 #           just add a -v --verbose mode
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
-
+#   ADD:    also block:Jun 26 22:08:33 whitebox sshd[669886]: banner exchange: Connection from 192.241.236.62 port 34448: invalid format
+#
+#
 ####################### [ Changes ] #######################
 # earlier wasn't noted... in fact I rarely noted changes, I really should.
 # 2023-06-01 beginning to implement failcount, but not done yet
@@ -121,16 +123,16 @@ version = "2023-06-27r0" #really need to update this every time I change somethi
 #stdscr.nodelay(True)
 
 class cBlock:
-    def __init__(self, vdatetime=None, ip=None, reason = None): #failcount not needed as count of datetime array will show failures
-        self.vdatetime = []
+    def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
+        self.aDateTime = []
         self.ip = ip
-        self.reason = []
+        self.aReason = []
 
-    def add_datetime(self, vdatetime):
-        self.vdatetime.append(vdatetime)
+    def add_datetime(self, vDT):
+        self.aDateTime.append(vDT)
 
-    def add_reason(self, reason):
-        self.reason.append(reason)
+    def add_reason(self, vReason):
+        self.aReason.append(vReason)
 
 aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
@@ -264,8 +266,8 @@ def PrintBlockList():
     LogData('printing blocklist')
     for i in range(len(aBlocklist)):
         LogData(aBlocklist[i].ip+':')
-        for x in range(len(aBlocklist[i].vdatetime)):
-            LogData('-->'+ReverseDateTime(aBlocklist[i].vdatetime[x])+" reason: "+aBlocklist[i].vreason[x])
+        for x in range(len(aBlocklist[i].aDateTime)):
+            LogData('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" reason: "+aBlocklist[i].aReason[x])
 
 
 #######################
@@ -311,11 +313,11 @@ def FirstRunCheckBlocklist():
     global failcount
     LogData('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
-        if len(aBlocklist[x].vdatetime) >= failcount:
-            #print('len(aBlocklist[x].vdatetime) '+str(len(aBlocklist[x].vdatetime)))
+        if len(aBlocklist[x].aDateTime) >= failcount:
+            #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
             BlockIP(aBlocklist[x].ip)
             #print('blocking: "'+aBlocklist[x].ip+'"')
-
+    
 
 #######################
 def CheckBlocklist(ip, timeblocked, reason):
@@ -327,8 +329,8 @@ def CheckBlocklist(ip, timeblocked, reason):
     for x in range(0, len(aBlocklist)):
         if aBlocklist[x].ip == ip:
             dtfound = x
-            for y in range(0, len(aBlocklist[x].vdatetime)):
-                if aBlocklist[x].vdatetime[y] == timeblocked:
+            for y in range(0, len(aBlocklist[x].aDateTime)):
+                if aBlocklist[x].aDateTime[y] == timeblocked:
                     foundit = True
                     break
 
@@ -337,7 +339,7 @@ def CheckBlocklist(ip, timeblocked, reason):
             LogData('adding datetime: '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
-            if len(aBlocklist[dtfound].vdatetime) >= failcount:
+            if len(aBlocklist[dtfound].aDateTime) >= failcount:
                 BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
@@ -456,10 +458,10 @@ def OpenAuthLogAsStream():
     global AuthPos
     global AuthFileHandle
     iFlush = 0
-    alogsize = os.stat(authfile).st_size
-    # Check if the file size has changed
     with open(authfile, 'r') as AuthFileHandle: #gets closed in CloseGracefully()
         while True:
+            alogsize = os.stat(authfile).st_size
+            # Check if the file size has changed
             iFlush += 1
             if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
                 iFlush = 0
@@ -478,6 +480,7 @@ def OpenAuthLogAsStream():
                 # Process the new lines
                 lines = new_data.split('\n')
                 for line in lines:
+                    #LogData("AUTH.LOG>>"+line) #remove this line when fixed issue with not updating
                     scanandcompare(line)
                         
                 # Update the initial size to the current size
