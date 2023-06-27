@@ -7,8 +7,5 @@ My RPi is on 24/7 and connected to the net.
 
 ### It gets a LOT of failed password attempts.
 
-
-This is the mod (devel) branch.
-Everything in here probably doesn't work as expected, or not enough to merge.
-
-When this branch is working it will be merged into main/master.
+Read authlogger.py, all is explained in the comments.
+If you're not willing to live on the edge, go use fail2ban, it is probably more suitable anyway.
