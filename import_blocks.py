@@ -5,19 +5,19 @@ import pickle #for saving blocklist
 import datetime #for timestamping#
 
 class cBlock:
-    def __init__(self, vdatetime=None, ip=None, reason = None): #failcount not needed as count of datetime array will show failures
-        self.vdatetime = []
+    def __init__(self, aDateTime=None, ip=None, reason = None): #failcount not needed as count of datetime array will show failures
+        self.aDateTime = []
         self.ip = ip
         self.reason = []
 
-    def add_datetime(self, vdatetime):
-        self.vdatetime.append(vdatetime)
+    def add_datetime(self, aDateTime):
+        self.aDateTime.append(aDateTime)
 
     def add_reason(self, reason):
         self.reason.append(reason)
 
     def add_datetime(self, datetime):
-        self.vdatetime.append(datetime)
+        self.aDateTime.append(datetime)
 
 
 aBlocklist = [] #array of cBlock objects
@@ -28,8 +28,8 @@ def SaveBlockList():
     global blocklist
     global blockfile
     #for x in range(0, len(aBlocklist)):
-    #    for y in range(0, len(aBlocklist[x].vdatetime)):
-    #        print(aBlocklist[x].ip+' '+aBlocklist[x].vdatetime[y])
+    #    for y in range(0, len(aBlocklist[x].aDateTime)):
+    #        print(aBlocklist[x].ip+' '+aBlocklist[x].aDateTime[y])
     print("---")
     print('saving blocklist')
     with open(blockfile, "wb") as fblockfile:
@@ -67,8 +67,8 @@ def CheckBlocklist(ip, timeblocked):
     for x in range(0, len(aBlocklist)):
         if aBlocklist[x].ip == ip:
             dtfound = x
-            for y in range(0, len(aBlocklist[x].vdatetime)):
-                if aBlocklist[x].vdatetime[y] == timeblocked:
+            for y in range(0, len(aBlocklist[x].aDateTime)):
+                if aBlocklist[x].aDateTime[y] == timeblocked:
                     foundit = True
                     break
 
