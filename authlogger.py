@@ -13,7 +13,9 @@
 #
 # the actual firewall rule setting is: 'iptables -I INPUT -s <IP> -j DROP'
 #
-
+# Jun 28 03:26:42 whitebox sshd[776616]: Failed password for invalid user ubuntu from 118.36.15.126 port 61324 ssh2
+# Jun 26 22:08:33 whitebox sshd[669886]: banner exchange: Connection from 192.241.236.62 port 34448: invalid format
+# Jun 28 11:22:07 whitebox sshd[805578]: Invalid user wqmarlduiqkmgs from 60.205.111.35 port 57770
 ####################### [ Requirements ] #######################
 
 # Initially it only needs a few things.
@@ -36,8 +38,6 @@
 #   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
 #           just add a -v --verbose mode
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
-#   ADD:    also block:Jun 26 22:08:33 whitebox sshd[669886]: banner exchange: Connection from 192.241.236.62 port 34448: invalid format
-#           Possibly create a dict of error msgs and positional data to check for.
 #
 ####################### [ Changes ] #######################
 # earlier wasn't noted... in fact I rarely noted changes, I really should.
@@ -45,6 +45,8 @@
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
 # 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
 # 2023-06-27 FIXED: not blocking new IPs, checking auth.log size changes was outside the loop, oops.
+# 2023-06-28 FIXED: number of blocked IPs was incorrect by 1. added more auth error types to scanandcompare()
+#                   also simplified scanandcompare()
 #
 
 ####################### [ How this works ] #######################
@@ -111,7 +113,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-27r1" #really need to update this every time I change something
+version = "2023-06-28r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -342,7 +344,7 @@ def CheckBlocklist(ip, timeblocked, reason):
             if len(aBlocklist[dtfound].aDateTime) >= failcount:
                 BlockIP(ip)
         else:
-            LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
+            LogData('['+str(len(aBlocklist)-1)+'] adding: '+ip+' ['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
@@ -384,16 +386,27 @@ def scanandcompare(aline):
     global localip
     global failcount
     
-    #newblock = False
+    newblock = False
     
-    if (((aline.find('Failed password for',) >= 0) or (aline.find('Did not receive identification') >= 0)) and (aline.find(localip) < 0)):
-        tmp = aline.split(' ')
-        if aline.find('Failed') >= 0:
+    if aline.find(localip) < 0: #don't do anything if it's the local ip
+        tmp = aline.split(' ') #split the line into an array
+        if aline.find('Failed password for',) >= 0:
+            newblock = True
             checkline = tmp[len(tmp)-4]
-        else:
+            
+        if aline.find('Did not receive identification') >= 0:
+            newblock = True
             checkline = tmp[len(tmp)-3]
 
-        CheckBlocklist(checkline, GetDateTime(aline), aline[16:])
+        if aline.find('Invalid user',) >= 0:
+            newblock = True
+            checkline = tmp[len(tmp)-3]
+
+        if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
+            newblock = True
+            checkline = tmp[len(tmp)-5]
+    
+    if newblock: CheckBlocklist(checkline, GetDateTime(aline), aline[16:])
 
 
 #######################
