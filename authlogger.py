@@ -4,7 +4,7 @@
 #
 # currently in use on my RPi because it's always connected and powered on. Every day people try to log in.
 # at various points I've tried to implement keyboard input, but over shh (even with sshkeyboard)
-# it breaks. curses can suck my dick as that solves one problem by introducing another.
+# it breaks due to blocking input. curses can suck my dick as that solves one problem by introducing another.
 #
 # This came about because I didn't want to learn Fail2ban and wanted a real project to learn Python better.
 # I am sure fail2ban is much more feature full and whatnot, but I didn't want a client-server setup, just
@@ -34,7 +34,7 @@
 # TODO:
 #   BUG:    ini file is loaded and unloaded to settings.ini without user intervention and ignores the -i arg.
 #           this is because I was testing configparser and forgot about it until just now (2023-06-27)
-#   FIXME:  keyboard only works locally. disabled for now. find SSH (and) RPi compatible workaround.
+#   FIXME:  Find SSH compatible non blocking keyboard input.
 #   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
 #           just add a -v --verbose mode
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
@@ -45,8 +45,8 @@
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
 # 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
 # 2023-06-27 FIXED: not blocking new IPs, checking auth.log size changes was outside the loop, oops.
-# 2023-06-28 FIXED: number of blocked IPs was incorrect by 1. added more auth error types to scanandcompare()
-#                   also simplified scanandcompare()
+# 2023-06-28 FIXED: number of blocked IPs was incorrect by 1. added more auth error types to ScanAndCompare()
+#                   also simplified ScanAndCompare()
 #
 
 ####################### [ How this works ] #######################
@@ -72,8 +72,8 @@
 #     FirstRunCheckBlocklist() to block any IPs already in the blocklist file if the number of datetime entries is >= failcount
 #   PrintBlockList() to print the current blocklist to screen and log file
 #   OpenAuthLogAsStream() to open the auth.log file as a stream, once opened stay in this function until ctrl-c
-#      #Every time authlog gets new data, split it into lines and process each line by sending to scanandcompare()
-#      #scanandcompare() checks if the line is a failed login attempt, if it is, it sends the IP to CheckBlocklist()
+#      #Every time authlog gets new data, split it into lines and process each line by sending to ScanAndCompare()
+#      #ScanAndCompare() checks if the line is a failed login attempt, if it is, it sends the IP to CheckBlocklist()
 #    CheckBlocklist() checks if the IP is already in the blocklist aBlocklist[], if yes and unique, it adds the datetime to the cBlock object, else
 #      #if the IP is not in the blocklist, it adds the IP to the aBlocklist[].
 #      #if the number of datetime entries in the cBlock object of aBlocklist[] is >= failcount, it sends the IP to BlockIP()
@@ -113,7 +113,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-28r0" #really need to update this every time I change something
+version = "2023-06-28r1" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -380,7 +380,7 @@ def ClearIPTables():
 
 
 #######################
-def scanandcompare(aline):
+def ScanAndCompare(aline):
     global authstrings
     global blocklist
     global localip
@@ -494,7 +494,7 @@ def OpenAuthLogAsStream():
                 lines = new_data.split('\n')
                 for line in lines:
                     #LogData("AUTH.LOG>>"+line) #remove this line when fixed issue with not updating
-                    scanandcompare(line)
+                    ScanAndCompare(line)
                         
                 # Update the initial size to the current size
                 AuthPos = alogsize
