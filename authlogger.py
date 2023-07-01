@@ -19,7 +19,7 @@
 ####################### [ Requirements ] #######################
 
 # Initially it only needs a few things.
-# 1. The auth.log file, either in the default location or specified on command line.
+# 1. The auth.log file, either in the default location (for debian based) or specified on command line.
 # 2. this file, run as sudo root.
 # 3. iptables installed and running. (probably already installed on most linux distros)
 # 4. oh, and Linux. You can test some of the code on Windows, but it won't actually do anything.
@@ -32,12 +32,12 @@
 ####################### [ To Do ] #######################
 #
 # TODO:
-#   BUG:    ini file is loaded and unloaded to settings.ini without user intervention and ignores the -i arg.
-#           this is because I was testing configparser and forgot about it until just now (2023-06-27)
+#   CHANGE: .ini should also contain the blocking rules and file locations.
 #   FIXME:  Find SSH compatible non blocking keyboard input.
 #   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
 #           just add a -v --verbose mode
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
+#   CHANGE: switch from configparser to toml
 #
 ####################### [ Changes ] #######################
 # earlier wasn't noted... in fact I rarely noted changes, I really should.
@@ -47,7 +47,7 @@
 # 2023-06-27 FIXED: not blocking new IPs, checking auth.log size changes was outside the loop, oops.
 # 2023-06-28 FIXED: number of blocked IPs was incorrect by 1. added more auth error types to ScanAndCompare()
 #                   also simplified ScanAndCompare()
-#
+# 2023-07-01 CHANGED: moving from cmdline args to .ini file for settings
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -66,7 +66,7 @@
 #   set global variables and check if running on linux, if not go into debug mode (doesn't actually send to iptables in debug mode)
 #   OpenLogFile() to initialise the log file for sending data to (also prints to screen on logging)
 #   Welcome() to show welcome text, duh..
-#   GetArgs() to get command line arguments, override ini settings if ini specified on cmd line plus other arguments
+#   GetArgs() to get command line arguments. Ignored now, loads ini file instead.
 #   ClearIPTables() to clear out IPTables rules before setting any new ones
 #   OpenBlocklist() to load the blocklist file into memory
 #     FirstRunCheckBlocklist() to block any IPs already in the blocklist file if the number of datetime entries is >= failcount
@@ -113,7 +113,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-06-28r1" #really need to update this every time I change something
+version = "2023-07-01r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -170,6 +170,12 @@ def ErrorArg(err):
             print("got stuck in a loop")
         case 5:
             print("unable to create or write to logfile")
+        case 6:
+            print("settings.ini file not found.")
+        case 7:
+            print("auth.log file not found.")
+        case 8:
+            print("settings.ini failed to load correctly.")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -187,12 +193,7 @@ def CheckIsLinux():
 
 #######################
 def Help():
-    print("**something went wrong. I don't know what, so if you started with no parameters it probably means a file didn't exist or you ran as a normie rather than root\n")
-    print("auth.log file to scan            : -a, --authfile <filename>")
-    print("blocklist file with IPs          : -b, --blockfile <filename>")
-    print("number of attempts to block      : -f, --failcount <2>")
-    print("inifile with settings (not req.) : -i, --inifile <filename>")
-    print("local ip address range to ignore : -l, --localip <192.168.>")
+    print("**something went wrong. I don't know what, it probably means a file didn't exist or you ran as a normie rather than root\n")
     print("Remember: must run as sudo/root or it cannot block IPs\n")
 
 
@@ -217,49 +218,51 @@ def GetArgs():
     global StartDir
     global slash
     #failure = False
-    loadsettingsstatus = False
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
-    parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
-    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
-    parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
-    parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
-    args = parser.parse_args()
+#    loadsettingsstatus = False
+#    parser = argparse.ArgumentParser()
+#    parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
+#    parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
+#    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
+#    parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
+#    parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
+#    args = parser.parse_args()
 
     #load the ini file before anything else, so it can be overwritten by command line args
-    inifile = args.inifile
-    if inifile != '':
-        loadsettingsstatus = LoadSettings()
+    #inifile = args.inifile
+    #if inifile != '':
+    #    loadsettingsstatus = LoadSettings()
 
     
     
-    if (args.authfile != parser.get_default("authfile")) or (loadsettingsstatus == False):
-        authfile = args.authfile
+#    if (args.authfile != parser.get_default("authfile")) or (loadsettingsstatus == False):
+#        authfile = args.authfile
 
-    if (args.blockfile != parser.get_default("blockfile")) or (loadsettingsstatus == False):
-        blockfile = args.blockfile
+#    if (args.blockfile != parser.get_default("blockfile")) or (loadsettingsstatus == False):
+#        blockfile = args.blockfile
     
-    if (args.localip != parser.get_default("localip")) or (loadsettingsstatus == False):
-        localip = args.localip
+#    if (args.localip != parser.get_default("localip")) or (loadsettingsstatus == False):
+#        localip = args.localip
 
-    if (args.failcount != parser.get_default("failcount")) or (loadsettingsstatus == False):
-        failcount = args.failcount
+#    if (args.failcount != parser.get_default("failcount")) or (loadsettingsstatus == False):
+#        failcount = args.failcount
+
+#    if authfile == '': ErrorArg(2)
+#    if blockfile == '': ErrorArg(2)
+#    if failcount < 1: ErrorArg(2)
+#    if localip == '': ErrorArg(2)
+
+    inifile = StartDir+slash+"settings.ini"
+    if not os.path.isfile(inifile): ErrorArg(6)
+
+    if not LoadSettings(): ErrorArg(8)
 
     if debugmode:
         authfile = StartDir+slash+"auth.log"
-    if authfile == '': ErrorArg(2)
-    if blockfile == '': ErrorArg(2)
-    if failcount < 1: ErrorArg(2)
-    if localip == '': ErrorArg(2)
-    if not os.path.isfile(authfile): ErrorArg(0)
+    
+    if not os.path.isfile(authfile): ErrorArg(7)
 
     #blockcount = FileLineCount(blockfile) #change this, no longer just a line per ip
     #authlinecount = FileLineCount(authfile)
-    LogData('localip>'+localip)
-    LogData('auth>'+authfile)
-    LogData('block>'+blockfile)
-    LogData('ini>'+args.inifile)
-    LogData('failcount>'+str(failcount))
 
 
 #######################
@@ -510,6 +513,7 @@ def SaveSettings():
     global blockfile
     global authfile
     global failcount
+    LogData('saving settings')
     # Create a new configparser object
     config = configparser.ConfigParser()
     # Set some example settings
@@ -535,29 +539,26 @@ def LoadSettings():
     global blockfile
     global authfile
     global failcount
+    LogData('loading settings')
     rt = False
     config = configparser.ConfigParser()
-    if  os.path.isfile('settings.ini'):
-        try:
-            config.read('settings.ini')
-            # Access the settings
-            localip = config['Settings']['localip']
-            blockfile = config['Settings']['blockfile']
-            authfile = config['Settings']['authfile']
-            failcount = int(config['Settings']['failcount'])
-
-            # show me the settings
-            LogData("loaded settings.ini:")
-            LogData(f"localip: {localip}")
-            LogData(f"blockfile: {blockfile}")
-            LogData(f"authfile: {authfile}")
-            LogData(f"failcount: {failcount}")
-            rt = True
-        except:
-            LogData('error loading settings.ini')
-            rt = False
-    else:
-        LogData('settings.ini not found, using defaults')
+    try:
+        config.read('settings.ini')
+        # Access the settings
+        localip = config['Settings']['localip'] = "192.168."
+        blockfile = config['Settings']['blockfile'] = StartDir+slash+"blocklist.txt"
+        authfile = config['Settings']['authfile'] = "/var/log/auth.log"
+        fc = config['Settings']['failcount'] = "2"
+        failcount = int(fc)
+        # show me the settings
+        LogData("loaded settings.ini:")
+        LogData(f"localip: {localip}")
+        LogData(f"blockfile: {blockfile}")
+        LogData(f"authfile: {authfile}")
+        LogData(f"failcount: {failcount}")
+        rt = True
+    except:
+        LogData('error loading settings.ini')
         rt = False
     return rt
 
@@ -628,7 +629,7 @@ def main():
 
 
     if not CheckIsLinux():
-        LogData("not linux, so going into debug mode")
+        print("not linux, so going into debug mode")
         slash = '\\'
         debugmode = True
         

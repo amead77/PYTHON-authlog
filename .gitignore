@@ -3,4 +3,5 @@ duckdns.sh
 testcode.py
 auth.log
 blocklist.txt
-settings.ini
+logs/authlogger.log
+.gitignore
