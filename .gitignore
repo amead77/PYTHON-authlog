@@ -5,3 +5,4 @@ auth.log
 blocklist.txt
 logs/authlogger.log
 .gitignore
+vncserver-x11.log

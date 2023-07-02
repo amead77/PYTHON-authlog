@@ -16,18 +16,19 @@
 # Jun 28 03:26:42 whitebox sshd[776616]: Failed password for invalid user ubuntu from 118.36.15.126 port 61324 ssh2
 # Jun 26 22:08:33 whitebox sshd[669886]: banner exchange: Connection from 192.241.236.62 port 34448: invalid format
 # Jun 28 11:22:07 whitebox sshd[805578]: Invalid user wqmarlduiqkmgs from 60.205.111.35 port 57770
+# <14> 2023-07-02T17:50:30.773Z whitebox vncserver-x11[551]: SAuthUserPasswd: Failed authentication attempt for user "adam"
 ####################### [ Requirements ] #######################
 
 # Initially it only needs a few things.
-# 1. The auth.log file, either in the default location (for debian based) or specified on command line.
+# 1. The auth.log file, which is usually in /var/log/auth.log
 # 2. this file, run as sudo root.
 # 3. iptables installed and running. (probably already installed on most linux distros)
 # 4. oh, and Linux. You can test some of the code on Windows, but it won't actually do anything.
 # 5. tmux or screen is recommended so you can run it in the background and detach the session.
 #    I run it in a tmux session on my RPi, and I can ssh in and check the status of anytime I want by
 #    attaching to the tmux session. Or I can look at the logfile from anywhere.
-# 6. Python >= 3.10 due to match case.
-#
+# 6. Python >= 3.10 due to match/case.
+# 7. Check settings.ini if you want to change the default settings.
 
 ####################### [ To Do ] #######################
 #
@@ -48,7 +49,8 @@
 # 2023-06-28 FIXED: number of blocked IPs was incorrect by 1. added more auth error types to ScanAndCompare()
 #                   also simplified ScanAndCompare()
 # 2023-07-01 CHANGED: moving from cmdline args to .ini file for settings
-
+# 2023-07-02 ADDED: beginning of implementing vnc log parsing. (scanandcompare() to work on finishing)
+#
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -113,7 +115,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-01r0" #really need to update this every time I change something
+version = "2023-07-02r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -209,8 +211,8 @@ def Welcome():
 #######################
 def GetArgs():
     LogData("getting args")
-    global blockfile
-    global authfile
+    global BlockFileName
+    global AuthFileName
     global blockcount
     global localip
     global failcount
@@ -220,8 +222,8 @@ def GetArgs():
     #failure = False
 #    loadsettingsstatus = False
 #    parser = argparse.ArgumentParser()
-#    parser.add_argument('-a', '--authfile', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
-#    parser.add_argument('-b', '--blockfile', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
+#    parser.add_argument('-a', '--AuthFileName', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
+#    parser.add_argument('-b', '--BlockFileName', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
 #    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
 #    parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
 #    parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
@@ -234,11 +236,11 @@ def GetArgs():
 
     
     
-#    if (args.authfile != parser.get_default("authfile")) or (loadsettingsstatus == False):
-#        authfile = args.authfile
+#    if (args.AuthFileName != parser.get_default("AuthFileName")) or (loadsettingsstatus == False):
+#        AuthFileName = args.AuthFileName
 
-#    if (args.blockfile != parser.get_default("blockfile")) or (loadsettingsstatus == False):
-#        blockfile = args.blockfile
+#    if (args.BlockFileName != parser.get_default("BlockFileName")) or (loadsettingsstatus == False):
+#        BlockFileName = args.BlockFileName
     
 #    if (args.localip != parser.get_default("localip")) or (loadsettingsstatus == False):
 #        localip = args.localip
@@ -246,8 +248,8 @@ def GetArgs():
 #    if (args.failcount != parser.get_default("failcount")) or (loadsettingsstatus == False):
 #        failcount = args.failcount
 
-#    if authfile == '': ErrorArg(2)
-#    if blockfile == '': ErrorArg(2)
+#    if AuthFileName == '': ErrorArg(2)
+#    if BlockFileName == '': ErrorArg(2)
 #    if failcount < 1: ErrorArg(2)
 #    if localip == '': ErrorArg(2)
 
@@ -257,12 +259,12 @@ def GetArgs():
     if not LoadSettings(): ErrorArg(8)
 
     if debugmode:
-        authfile = StartDir+slash+"auth.log"
+        AuthFileName = StartDir+slash+"auth.log"
     
-    if not os.path.isfile(authfile): ErrorArg(7)
+    if not os.path.isfile(AuthFileName): ErrorArg(7)
 
-    #blockcount = FileLineCount(blockfile) #change this, no longer just a line per ip
-    #authlinecount = FileLineCount(authfile)
+    #blockcount = FileLineCount(BlockFileName) #change this, no longer just a line per ip
+    #authlinecount = FileLineCount(AuthFileName)
 
 
 #######################
@@ -383,45 +385,51 @@ def ClearIPTables():
 
 
 #######################
-def ScanAndCompare(aline):
+def ScanAndCompare(aline, authtype):
     global authstrings
     global blocklist
     global localip
     global failcount
     
     newblock = False
-    
-    if aline.find(localip) < 0: #don't do anything if it's the local ip
-        tmp = aline.split(' ') #split the line into an array
-        if aline.find('Failed password for',) >= 0:
-            newblock = True
-            checkline = tmp[len(tmp)-4]
-            
-        if aline.find('Did not receive identification') >= 0:
-            newblock = True
-            checkline = tmp[len(tmp)-3]
+    match authtype:
+        case 'auth.log':
+            if aline.find(localip) < 0: #don't do anything if it's the local ip
+                tmp = aline.split(' ') #split the line into an array
+                if aline.find('Failed password for',) >= 0:
+                    newblock = True
+                    checkline = tmp[len(tmp)-4]
+                    
+                if aline.find('Did not receive identification') >= 0:
+                    newblock = True
+                    checkline = tmp[len(tmp)-3]
 
-        if aline.find('Invalid user',) >= 0:
-            newblock = True
-            checkline = tmp[len(tmp)-3]
+                if aline.find('Invalid user',) >= 0:
+                    newblock = True
+                    checkline = tmp[len(tmp)-3]
 
-        if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
-            newblock = True
-            checkline = tmp[len(tmp)-5]
-    
-    if newblock: CheckBlocklist(checkline, GetDateTime(aline), aline[16:])
+                if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
+                    newblock = True
+                    checkline = tmp[len(tmp)-5]
+            if newblock: CheckBlocklist(checkline, GetDateTime(aline), aline[16:])
+        
+        case 'vncserver-x11.log':
+            if aline.find('Failed authentication') >= 0:
+                newblock = True
+                tmp = aline.split(' ')
+                checkline = tmp[len(tmp)-1]
 
 
 #######################
 def authModified():
     global authlogModtime
-    global authfile
+    global AuthFileName
 
     authModified = False
 
-    if (os.path.isfile(authfile)):
-        if (os.path.getmtime(authfile) != authlogModtime):
-            authlogModtime = os.path.getmtime(authfile)
+    if (os.path.isfile(AuthFileName)):
+        if (os.path.getmtime(AuthFileName) != authlogModtime):
+            authlogModtime = os.path.getmtime(AuthFileName)
             authModified = True
     else:
         LogData('auth.log file not found')
@@ -436,13 +444,13 @@ def OpenBlockList():
     LogData('opening blocklist')
     #read in the blocklist file to aBlocklist array
     global aBlocklist
-    global blockfile
+    global BlockFileName
 
     #aBlocklist = [] #should be the first time this is called. / wasn't though was it
 
-    if (os.path.isfile(blockfile)):
+    if (os.path.isfile(BlockFileName)):
         try:
-            with open(blockfile, 'rb') as fblockfile:
+            with open(BlockFileName, 'rb') as fblockfile:
                 aBlocklist = pickle.load(fblockfile)
             #fblockfile.close() not required with 'with'
         except:
@@ -459,10 +467,10 @@ def SaveBlockList():
     #print('saving blocklist (dump)')
     #save the blocklist array to the blocklist file
     global blocklist
-    global blockfile
+    global BlockFileName
 
     LogData('saving blocklist')
-    with open(blockfile, "wb") as fblockfile:
+    with open(BlockFileName, "wb") as fblockfile:
         pickle.dump(aBlocklist, fblockfile)
     #fblockfile.close() not required with 'with'
 
@@ -470,13 +478,16 @@ def SaveBlockList():
 #######################
 def OpenAuthLogAsStream():
     LogData('opening auth.log as stream')
-    global authfile
+    global AuthFileName
     global AuthPos
     global AuthFileHandle
+    global vncFileName
+    global vncFileHandle
     iFlush = 0
-    with open(authfile, 'r') as AuthFileHandle: #gets closed in CloseGracefully()
+    with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
         while True:
-            alogsize = os.stat(authfile).st_size
+            alogsize = os.stat(AuthFileName).st_size
+            vnclogsize = os.stat(vncFileName).st_size
             # Check if the file size has changed
             iFlush += 1
             if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
@@ -497,12 +508,31 @@ def OpenAuthLogAsStream():
                 lines = new_data.split('\n')
                 for line in lines:
                     #LogData("AUTH.LOG>>"+line) #remove this line when fixed issue with not updating
-                    ScanAndCompare(line)
+                    ScanAndCompare(line, 'auth.log')
                         
                 # Update the initial size to the current size
                 AuthPos = alogsize
             elif alogsize < AuthPos: #log was rotated
                 AuthPos = 0
+            
+            if vnclogsize > VNCPos:
+                # Move the file pointer to the previous position
+                vncFileHandle.seek(VNCPos)
+                # Read the new lines added to the file
+                new_data = vncFileHandle.read()
+                
+                # Process the new lines
+                lines = new_data.split('\n')
+                for line in lines:
+                    #LogData("VNC.LOG>>"+line) #remove this line when fixed issue with not updating
+                    ScanAndCompare(line, 'vncserver-x11.log')
+                        
+                # Update the initial size to the current size
+                VNCPos = vnclogsize
+            elif vnclogsize < VNCPos: #log was rotated
+                VNCPos = 0
+
+
             time.sleep(1)
 
 
@@ -510,8 +540,8 @@ def OpenAuthLogAsStream():
 def SaveSettings():
     #save last settings to settings.ini
     global localip
-    global blockfile
-    global authfile
+    global BlockFileName
+    global AuthFileName
     global failcount
     LogData('saving settings')
     # Create a new configparser object
@@ -519,9 +549,10 @@ def SaveSettings():
     # Set some example settings
     config['Settings'] = {
         'localip': localip,
-        'blockfile': blockfile,
-        'authfile': authfile,
-        'failcount': failcount
+        'blockfile': BlockFileName,
+        'authfile': AuthFileName,
+        'failcount': failcount,
+        'vncfile': vncFileName
     }
     # Save the settings to an INI file
     try:
@@ -536,9 +567,11 @@ def SaveSettings():
 def LoadSettings():
     # Load the settings from the INI file at startup, this will override the defaults, but not user set vars
     global localip
-    global blockfile
-    global authfile
+    global BlockFileName
+    global AuthFileName
     global failcount
+    global vncFileName
+    
     LogData('loading settings')
     rt = False
     config = configparser.ConfigParser()
@@ -546,16 +579,18 @@ def LoadSettings():
         config.read('settings.ini')
         # Access the settings
         localip = config['Settings']['localip'] = "192.168."
-        blockfile = config['Settings']['blockfile'] = StartDir+slash+"blocklist.txt"
-        authfile = config['Settings']['authfile'] = "/var/log/auth.log"
+        BlockFileName = config['Settings']['blockfile'] = StartDir+slash+"blocklist.txt"
+        AuthFileName = config['Settings']['authfile'] = "/var/log/auth.log"
         fc = config['Settings']['failcount'] = "2"
         failcount = int(fc)
+        vncFileName = config['Settings']['vncFileName'] = StartDir+slash+"vnc.txt"
         # show me the settings
         LogData("loaded settings.ini:")
         LogData(f"localip: {localip}")
-        LogData(f"blockfile: {blockfile}")
-        LogData(f"authfile: {authfile}")
+        LogData(f"blockfile: {BlockFileName}")
+        LogData(f"authfile: {AuthFileName}")
         LogData(f"failcount: {failcount}")
+        LogData(f"vncfile: {vncFileName}")
         rt = True
     except:
         LogData('error loading settings.ini')
@@ -565,14 +600,14 @@ def LoadSettings():
 
 #######################
 def OpenLogFile():
-    global logfile
+    global LogFileName
     global logFileHandle
     global slash
     if not os.path.isdir(StartDir + slash + 'logs'):
         os.mkdir(StartDir + slash + 'logs')
-    logfile = StartDir + slash + 'logs' + slash + 'authlogger.log'
+    LogFileName = StartDir + slash + 'logs' + slash + 'authlogger.log'
     try:
-        logFileHandle = open(logfile, 'a')
+        logFileHandle = open(LogFileName, 'a')
     except:
         print('error opening logfile')
         ErrorArg(5)
@@ -616,12 +651,16 @@ def main():
     global localip
     global StartDir
     global blockcount
-    global blockfile
-    global authfile
+    global BlockFileName
+    global AuthFileName
     global debugmode
     global AuthPos
     global AuthFileHandle
-    global logfile
+    global LogFileName
+    global vncFileName
+    global vncFileHandle
+    global VNCPos
+    VNCPos = 0
     AuthPos = 0
     global slash
     slash = '/'
