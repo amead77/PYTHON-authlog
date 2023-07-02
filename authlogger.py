@@ -16,7 +16,7 @@
 # Jun 28 03:26:42 whitebox sshd[776616]: Failed password for invalid user ubuntu from 118.36.15.126 port 61324 ssh2
 # Jun 26 22:08:33 whitebox sshd[669886]: banner exchange: Connection from 192.241.236.62 port 34448: invalid format
 # Jun 28 11:22:07 whitebox sshd[805578]: Invalid user wqmarlduiqkmgs from 60.205.111.35 port 57770
-# <14> 2023-07-02T17:50:30.773Z whitebox vncserver-x11[551]: SAuthUserPasswd: Failed authentication attempt for user "adam"
+# <13> 2023-07-02T17:50:30.774Z whitebox vncserver-x11[551]: Connections: disconnected: 192.168.1.220::54605 (TCP) ([AuthFailure] Either the username was not recognised, or the password was incorrect)
 ####################### [ Requirements ] #######################
 
 # Initially it only needs a few things.
@@ -349,7 +349,7 @@ def CheckBlocklist(ip, timeblocked, reason):
             if len(aBlocklist[dtfound].aDateTime) >= failcount:
                 BlockIP(ip)
         else:
-            LogData('['+str(len(aBlocklist)-1)+'] adding: '+ip+' ['+reason+']')
+            LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
@@ -358,10 +358,17 @@ def CheckBlocklist(ip, timeblocked, reason):
         
 
 #######################
-def GetDateTime(authstring):
-    #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
-    timey = time.strftime('%Y', time.localtime(time.time()))
-    timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
+def GetDateTime(authstring, authtype):
+    match authtype:
+        case 'auth.log':
+            #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
+            timey = time.strftime('%Y', time.localtime(time.time()))
+            timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
+        case 'vncserver-x11.log':
+            #get the 2nd word in authstring, convert to YYYYMMDDHHMMSS
+            timey = authstring.split()[1]
+            timey = timey[:10]+' '+timey[11:19]
+            timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey, "%Y-%m-%d %H:%M:%S"))
     return timey
 
 
@@ -392,32 +399,34 @@ def ScanAndCompare(aline, authtype):
     global failcount
     
     newblock = False
-    match authtype:
-        case 'auth.log':
-            if aline.find(localip) < 0: #don't do anything if it's the local ip
+    if aline.find(localip) < 0: #don't do anything if it's the local ip
+        match authtype:
+            case 'auth.log':
                 tmp = aline.split(' ') #split the line into an array
                 if aline.find('Failed password for',) >= 0:
                     newblock = True
-                    checkline = tmp[len(tmp)-4]
+                    checkIP = tmp[len(tmp)-4]
                     
                 if aline.find('Did not receive identification') >= 0:
                     newblock = True
-                    checkline = tmp[len(tmp)-3]
+                    checkIP = tmp[len(tmp)-3]
 
                 if aline.find('Invalid user',) >= 0:
                     newblock = True
-                    checkline = tmp[len(tmp)-3]
+                    checkIP = tmp[len(tmp)-3]
 
                 if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
                     newblock = True
-                    checkline = tmp[len(tmp)-5]
-            if newblock: CheckBlocklist(checkline, GetDateTime(aline), aline[16:])
-        
-        case 'vncserver-x11.log':
-            if aline.find('Failed authentication') >= 0:
-                newblock = True
-                tmp = aline.split(' ')
-                checkline = tmp[len(tmp)-1]
+                    checkIP = tmp[len(tmp)-5]
+                if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(auth.log) '+aline[16:])
+            
+            case 'vncserver-x11.log':
+                if aline.find('[AuthFailure]') >= 0:
+                    newblock = True
+                    tmp = aline.split(' ')
+                    checkIP = tmp[6]
+                    checkIP = checkIP.split('::')[0]
+                if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(vncserver-x11.log) '+aline[30:])
 
 
 #######################
@@ -477,13 +486,18 @@ def SaveBlockList():
 
 #######################
 def OpenAuthLogAsStream():
-    LogData('opening auth.log as stream')
+    LogData('opening logfiles as stream')
     global AuthFileName
     global AuthPos
     global AuthFileHandle
     global vncFileName
     global vncFileHandle
+    global VNCPos
     iFlush = 0
+
+    #
+    # aahh.. problem. if one of the files doesn't exist, what then...?
+    #
     with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
         while True:
             alogsize = os.stat(AuthFileName).st_size
@@ -507,7 +521,6 @@ def OpenAuthLogAsStream():
                 # Process the new lines
                 lines = new_data.split('\n')
                 for line in lines:
-                    #LogData("AUTH.LOG>>"+line) #remove this line when fixed issue with not updating
                     ScanAndCompare(line, 'auth.log')
                         
                 # Update the initial size to the current size
@@ -524,7 +537,6 @@ def OpenAuthLogAsStream():
                 # Process the new lines
                 lines = new_data.split('\n')
                 for line in lines:
-                    #LogData("VNC.LOG>>"+line) #remove this line when fixed issue with not updating
                     ScanAndCompare(line, 'vncserver-x11.log')
                         
                 # Update the initial size to the current size
@@ -532,9 +544,8 @@ def OpenAuthLogAsStream():
             elif vnclogsize < VNCPos: #log was rotated
                 VNCPos = 0
 
-
             time.sleep(1)
-
+        #<--while True:
 
 #######################
 def SaveSettings():
@@ -578,12 +589,12 @@ def LoadSettings():
     try:
         config.read('settings.ini')
         # Access the settings
-        localip = config['Settings']['localip'] = "192.168."
-        BlockFileName = config['Settings']['blockfile'] = StartDir+slash+"blocklist.txt"
-        AuthFileName = config['Settings']['authfile'] = "/var/log/auth.log"
-        fc = config['Settings']['failcount'] = "2"
+        localip = config.get('Settings','localip', fallback='192.168.')
+        BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.txt')
+        AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
+        fc = config.get('Settings','failcount', fallback= '2')
         failcount = int(fc)
-        vncFileName = config['Settings']['vncFileName'] = StartDir+slash+"vnc.txt"
+        vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.txt')
         # show me the settings
         LogData("loaded settings.ini:")
         LogData(f"localip: {localip}")
