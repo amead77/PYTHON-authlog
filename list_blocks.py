@@ -96,7 +96,7 @@ def main():
     slash = '/'
     StartDir = os.getcwd().removesuffix(slash)
 
-    blockfile = StartDir+slash+'blocklist.txt'
+    blockfile = StartDir+slash+'blocklist.dat'
     if not CheckIsLinux():
         print("not linux, so going into debug mode")
         slash = '\\'

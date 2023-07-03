@@ -1,5 +1,5 @@
 ####################### [ About ] #######################
-# This is a simple script to monitor the auth.log file for failed login attempts and block the IP address
+# This is a simple script to monitor the auth.log and vnc files for failed login attempts and block the IP address
 # if the number of failed attempts is >= failcount.
 #
 # currently in use on my RPi because it's always connected and powered on. Every day people try to log in.
@@ -13,14 +13,18 @@
 #
 # the actual firewall rule setting is: 'iptables -I INPUT -s <IP> -j DROP'
 #
+# currently (as per below 3 lines from auth.log, 4th is vnc log) an invalid user can create a double match,
+# as the system will log the invalid user, and the invalid password for invalid user. Not sure if I should
+# adjust as f*** anyone trying dodgy names ;)
 # Jun 28 03:26:42 whitebox sshd[776616]: Failed password for invalid user ubuntu from 118.36.15.126 port 61324 ssh2
 # Jun 26 22:08:33 whitebox sshd[669886]: banner exchange: Connection from 192.241.236.62 port 34448: invalid format
 # Jun 28 11:22:07 whitebox sshd[805578]: Invalid user wqmarlduiqkmgs from 60.205.111.35 port 57770
+# Jun  7 12:52:40 whitebox sshd[2669317]: Unable to negotiate with 143.198.205.110 port 59296: no matching key exchange method found. Their offer: diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1 [preauth]
 # <13> 2023-07-02T17:50:30.774Z whitebox vncserver-x11[551]: Connections: disconnected: 192.168.1.220::54605 (TCP) ([AuthFailure] Either the username was not recognised, or the password was incorrect)
 ####################### [ Requirements ] #######################
 
 # Initially it only needs a few things.
-# 1. The auth.log file, which is usually in /var/log/auth.log
+# 1. either auth.log file, which is usually in /var/log/auth.log, or vncserver-x11.log, which is usually in /var/log/vncserver-x11.log
 # 2. this file, run as sudo root.
 # 3. iptables installed and running. (probably already installed on most linux distros)
 # 4. oh, and Linux. You can test some of the code on Windows, but it won't actually do anything.
@@ -33,12 +37,12 @@
 ####################### [ To Do ] #######################
 #
 # TODO:
-#   CHANGE: .ini should also contain the blocking rules and file locations.
-#   FIXME:  Find SSH compatible non blocking keyboard input.
+#   CHANGE: .ini should also contain the blocking rules.
 #   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
 #           just add a -v --verbose mode
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
-#   CHANGE: switch from configparser to toml
+#   CHANGE: switch from configparser to toml, maybe, maybe not really needed.
+#   CHANGE: I use so many globals in this, I should probably switch to local variables and pass to funcs.
 #
 ####################### [ Changes ] #######################
 # earlier wasn't noted... in fact I rarely noted changes, I really should.
@@ -180,6 +184,10 @@ def ErrorArg(err):
             print("auth.log file not found.")
         case 8:
             print("settings.ini failed to load correctly.")
+        case 9:
+            print("vnc log file not found.")
+        case 10:
+            print("neither auth.log nor vnc log file found/loaded.")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -263,7 +271,7 @@ def GetArgs():
     if debugmode:
         AuthFileName = StartDir+slash+"auth.log"
     
-    if not os.path.isfile(AuthFileName): ErrorArg(7)
+    #if not os.path.isfile(AuthFileName): ErrorArg(7)
 
     #blockcount = FileLineCount(BlockFileName) #change this, no longer just a line per ip
     #authlinecount = FileLineCount(AuthFileName)
@@ -369,6 +377,7 @@ def GetDateTime(authstring, authtype):
     match authtype:
         case 'auth.log':
             #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
+            #always use current year, as auth.log doesn't have year
             timey = time.strftime('%Y', time.localtime(time.time()))
             timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
         case 'vncserver-x11.log':
@@ -382,6 +391,9 @@ def GetDateTime(authstring, authtype):
 #######################
 def ReverseDateTime(authstring):
     #get the date and time in the format YYYYMMDDHHMMSS and convert to YYYY-MM-DD HH:MM:SS
+    #this is only used for printing to the log file and screen.
+    #the class cBlock uses the YYYYMMDDHHMMSS format, which was an oversight as YYYY-MM... would work fine, 
+    #I could change it, but then I'd lose all my current saved IP's, so I'll leave it for now.
     timey = time.strftime('%Y-%m-%d %H:%M:%S', time.strptime(authstring, "%Y%m%d%H%M%S"))
     return timey
 
@@ -430,7 +442,12 @@ def ScanAndCompare(aline, authtype):
                     newblock = True
                     checkIP = tmp[len(tmp)-5]
                 if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(auth.log) '+aline[16:])
-            
+
+                if (aline.find('Unable to negotiate',) >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
+                    newblock = True
+                    checkIP = tmp[9]
+                if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(auth.log) '+aline[16:])
+
             case 'vncserver-x11.log':
                 if aline.find('[AuthFailure]') >= 0:
                     newblock = True
@@ -495,7 +512,9 @@ def SaveBlockList():
     #fblockfile.close() not required with 'with'
 
 
-#######################
+################################################################################################
+# This is the main function loop, it reads the log file and calls ScanAndCompare for each line #
+################################################################################################
 def OpenLogFilesAsStream():
     LogData('opening logfiles as stream')
     global AuthFileName
@@ -507,8 +526,7 @@ def OpenLogFilesAsStream():
     global authExists
     global vncExists
 
-    iFlush = 0
-
+    iFlush = 0 #flush log data every 10 seconds (approx)
 
     if (os.path.isfile(AuthFileName)):
         try:
@@ -535,18 +553,22 @@ def OpenLogFilesAsStream():
         vncExists = False
         LogData(vncFileName+' file not found')
         #ErrorArg(2)
+    
+    if not (authExists and vncExists): ErrorArg(10) #if either file doesn't exist, exit, why else are we running?
+    
     #
     # aahh.. problem. if one of the files doesn't exist, what then...?
     #
     #with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
     while True:
+        iFlush += 1
+        if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
+            iFlush = 0
+            FlushLogFile()
+
         if authExists:
             alogsize = os.stat(AuthFileName).st_size
             # Check if the file size has changed
-            iFlush += 1
-            if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
-                iFlush = 0
-                FlushLogFile()
 
             #key = is_key_pressed()
             #if key == 'q':
@@ -616,6 +638,7 @@ def SaveSettings():
         LogData('error saving settings.ini')
 
 
+#######################
 def CheckLocalIP(CheckString):
     global aIgnoreIPs
     ret = False
@@ -625,6 +648,7 @@ def CheckLocalIP(CheckString):
     return ret
 
 
+#######################
 def SplitLocalIP(ipList):
 #split comma separated list of IPs into an array
     global aIgnoreIPs
@@ -651,7 +675,6 @@ def LoadSettings():
         config.read('settings.ini')
         # Access the settings
         localip = config.get('Settings','localip', fallback='192.168.')
-        SplitLocalIP(localip)
         BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.txt')
         AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
         fc = config.get('Settings','failcount', fallback= '2')
@@ -659,7 +682,8 @@ def LoadSettings():
         vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.txt')
         # show me the settings
         LogData("loaded settings.ini:")
-        LogData(f"localip: {localip}")
+        LogData(f"localip(ini): {localip}")
+        SplitLocalIP(localip)
         LogData(f"blockfile: {BlockFileName}")
         LogData(f"authfile: {AuthFileName}")
         LogData(f"failcount: {failcount}")
