@@ -226,7 +226,7 @@ def GetArgs():
     global blockcount
     global localip
     global failcount
-    global inifile
+    global iniFileName
     global StartDir
     global slash
     #failure = False
@@ -235,13 +235,13 @@ def GetArgs():
 #    parser.add_argument('-a', '--AuthFileName', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
 #    parser.add_argument('-b', '--BlockFileName', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
 #    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
-#    parser.add_argument('-i', '--inifile', action='store', help='.ini file and path', default='')
+#    parser.add_argument('-i', '--iniFileName', action='store', help='.ini file and path', default='')
 #    parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
 #    args = parser.parse_args()
 
     #load the ini file before anything else, so it can be overwritten by command line args
-    #inifile = args.inifile
-    #if inifile != '':
+    #iniFileName = args.iniFileName
+    #if iniFileName != '':
     #    loadsettingsstatus = LoadSettings()
 
     
@@ -263,8 +263,8 @@ def GetArgs():
 #    if failcount < 1: ErrorArg(2)
 #    if localip == '': ErrorArg(2)
 
-    inifile = StartDir+slash+"settings.ini"
-    if not os.path.isfile(inifile): ErrorArg(6)
+    iniFileName = StartDir+slash+"settings.ini"
+    
 
     if not LoadSettings(): ErrorArg(8)
 
@@ -617,6 +617,7 @@ def SaveSettings():
     global BlockFileName
     global AuthFileName
     global failcount
+    global iniFileName
     
     LogData('saving settings')
     # Create a new configparser object
@@ -631,7 +632,7 @@ def SaveSettings():
     }
     # Save the settings to an INI file
     try:
-        with open('settings.ini', 'w') as configfile:
+        with open(iniFileName, 'w') as configfile:
             config.write(configfile)
         configfile.close()
     except:
@@ -667,31 +668,45 @@ def LoadSettings():
     global AuthFileName
     global failcount
     global vncFileName
-    
+    global iniFileName
+
     LogData('loading settings')
     rt = False
-    config = configparser.ConfigParser()
-    try:
-        config.read('settings.ini')
-        # Access the settings
-        localip = config.get('Settings','localip', fallback='192.168.')
-        BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.txt')
-        AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
-        fc = config.get('Settings','failcount', fallback= '2')
-        failcount = int(fc)
-        vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.txt')
-        # show me the settings
-        LogData("loaded settings.ini:")
-        LogData(f"localip(ini): {localip}")
-        SplitLocalIP(localip)
-        LogData(f"blockfile: {BlockFileName}")
-        LogData(f"authfile: {AuthFileName}")
-        LogData(f"failcount: {failcount}")
-        LogData(f"vncfile: {vncFileName}")
+    if os.path.isfile(iniFileName):
+        config = configparser.ConfigParser()
+        try:
+            config.read(iniFileName)
+            # Access the settings
+            localip = config.get('Settings','localip', fallback='192.168.')
+            BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.txt')
+            AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
+            fc = config.get('Settings','failcount', fallback= '2')
+            failcount = int(fc)
+            vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.txt')
+            # show me the settings
+            LogData("loaded settings.ini:")
+
+            rt = True
+        except:
+            LogData('error loading settings.ini')
+            rt = False
+    else:
+        LogData('settings.ini not found, using defaults:')
+        localip = '192.168.'
+        BlockFileName = StartDir+slash+'blocklist.txt'
+        AuthFileName = '/var/log/auth.log'
+        failcount = 2
+        vncFileName = '/var/log/vncserver-x11.txt'
         rt = True
-    except:
-        LogData('error loading settings.ini')
-        rt = False
+
+    LogData(f"localip(ini): {localip}")
+    SplitLocalIP(localip)
+    LogData(f"blockfile: {BlockFileName}")
+    LogData(f"authfile: {AuthFileName}")
+    LogData(f"failcount: {failcount}")
+    LogData(f"vncfile: {vncFileName}")
+
+
     return rt
 
 
