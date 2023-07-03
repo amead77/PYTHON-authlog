@@ -50,7 +50,8 @@
 #                   also simplified ScanAndCompare()
 # 2023-07-01 CHANGED: moving from cmdline args to .ini file for settings
 # 2023-07-02 ADDED: beginning of implementing vnc log parsing. (scanandcompare() to work on finishing)
-#
+# 2023-07-03 CHANGED: opening logfiles as streams now split to check files exist and try..except to catch errors
+# 2023-07-03 ADDED: settings.ini can now have multiple local IP addresses to ignore, separated by commas
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -73,7 +74,7 @@
 #   OpenBlocklist() to load the blocklist file into memory
 #     FirstRunCheckBlocklist() to block any IPs already in the blocklist file if the number of datetime entries is >= failcount
 #   PrintBlockList() to print the current blocklist to screen and log file
-#   OpenAuthLogAsStream() to open the auth.log file as a stream, once opened stay in this function until ctrl-c
+#   OpenLogFilesAsStream() to open the auth.log file as a stream, once opened stay in this function until ctrl-c
 #      #Every time authlog gets new data, split it into lines and process each line by sending to ScanAndCompare()
 #      #ScanAndCompare() checks if the line is a failed login attempt, if it is, it sends the IP to CheckBlocklist()
 #    CheckBlocklist() checks if the IP is already in the blocklist aBlocklist[], if yes and unique, it adds the datetime to the cBlock object, else
@@ -115,7 +116,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-02r0" #really need to update this every time I change something
+version = "2023-07-03r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 # Initialize ncurses
@@ -140,6 +141,7 @@ class cBlock:
 
 aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
+aIgnoreIPs = [] #array of ip addresses to ignore
 
 #############################################################
 ####################### [ Functions ] #######################
@@ -283,7 +285,12 @@ def CloseGracefully(signal=None, frame=None):
     #if ctrl-c is pressed, save iptables and exit
     global aBlocklist
     global AuthFileHandle
+    global vncExists
+    global authExists
     #AuthFileHandle.close() #not requred, as with statement closes it automatically
+    LogData('closing streams')
+    if vncExists: vncFileHandle.close()
+    if authExists: AuthFileHandle.close()
     SaveBlockList()
     SaveSettings()
     CloseLogFile()
@@ -397,9 +404,13 @@ def ScanAndCompare(aline, authtype):
     global blocklist
     global localip
     global failcount
-    
+    global aIgnoreIPs
+
     newblock = False
-    if aline.find(localip) < 0: #don't do anything if it's the local ip
+    #check if aline is in the array of aIgnoreIPs
+    
+    if not CheckLocalIP(aline):
+    #if aline.find(localip) < 0: #don't do anything if it's the local ip
         match authtype:
             case 'auth.log':
                 tmp = aline.split(' ') #split the line into an array
@@ -485,7 +496,7 @@ def SaveBlockList():
 
 
 #######################
-def OpenAuthLogAsStream():
+def OpenLogFilesAsStream():
     LogData('opening logfiles as stream')
     global AuthFileName
     global AuthPos
@@ -493,15 +504,44 @@ def OpenAuthLogAsStream():
     global vncFileName
     global vncFileHandle
     global VNCPos
+    global authExists
+    global vncExists
+
     iFlush = 0
 
+
+    if (os.path.isfile(AuthFileName)):
+        try:
+            LogData('opening '+AuthFileName)
+            AuthFileHandle = open(AuthFileName, 'r')
+            authExists = True
+        except:
+            authExists = False
+            LogData(AuthFileName+' error while loading')
+    else:
+        authExists = False
+        LogData(AuthFileName+' file not found')
+        #ErrorArg(2)
+
+    if (os.path.isfile(vncFileName)):
+        try:
+            LogData('opening '+vncFileName)
+            vncFileHandle = open(vncFileName, 'r')
+            vncExists = True
+        except:
+            vncExists = False
+            LogData(vncFileName+' error while loading')
+    else:
+        vncExists = False
+        LogData(vncFileName+' file not found')
+        #ErrorArg(2)
     #
     # aahh.. problem. if one of the files doesn't exist, what then...?
     #
-    with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
-        while True:
+    #with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
+    while True:
+        if authExists:
             alogsize = os.stat(AuthFileName).st_size
-            vnclogsize = os.stat(vncFileName).st_size
             # Check if the file size has changed
             iFlush += 1
             if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
@@ -527,7 +567,8 @@ def OpenAuthLogAsStream():
                 AuthPos = alogsize
             elif alogsize < AuthPos: #log was rotated
                 AuthPos = 0
-            
+        if vncExists:        
+            vnclogsize = os.stat(vncFileName).st_size
             if vnclogsize > VNCPos:
                 # Move the file pointer to the previous position
                 vncFileHandle.seek(VNCPos)
@@ -544,8 +585,8 @@ def OpenAuthLogAsStream():
             elif vnclogsize < VNCPos: #log was rotated
                 VNCPos = 0
 
-            time.sleep(1)
-        #<--while True:
+        time.sleep(1)
+    #<--while True:
 
 #######################
 def SaveSettings():
@@ -554,6 +595,7 @@ def SaveSettings():
     global BlockFileName
     global AuthFileName
     global failcount
+    
     LogData('saving settings')
     # Create a new configparser object
     config = configparser.ConfigParser()
@@ -572,7 +614,26 @@ def SaveSettings():
         configfile.close()
     except:
         LogData('error saving settings.ini')
-            
+
+
+def CheckLocalIP(CheckString):
+    global aIgnoreIPs
+    ret = False
+    for i in range(len(aIgnoreIPs)):
+        if aIgnoreIPs[i] in CheckString:
+            ret = True
+    return ret
+
+
+def SplitLocalIP(ipList):
+#split comma separated list of IPs into an array
+    global aIgnoreIPs
+    #aIgnoreIPs = ipList.split(',')
+    #use list comprehension to split and strip the list
+    aIgnoreIPs = [x.strip() for x in ipList.split(',')]
+    
+    LogData('local IP list: '+str(aIgnoreIPs))
+
 
 #######################
 def LoadSettings():
@@ -590,6 +651,7 @@ def LoadSettings():
         config.read('settings.ini')
         # Access the settings
         localip = config.get('Settings','localip', fallback='192.168.')
+        SplitLocalIP(localip)
         BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.txt')
         AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
         fc = config.get('Settings','failcount', fallback= '2')
@@ -694,7 +756,7 @@ def main():
     #try:
     OpenBlockList()
     PrintBlockList()
-    OpenAuthLogAsStream()
+    OpenLogFilesAsStream()
     #except:
         #print('error in main()')
     #finally:
