@@ -37,7 +37,8 @@
 ####################### [ To Do ] #######################
 #
 # TODO:
-#   CHANGE: .ini should also contain the blocking rules.
+#   CHANGE: could do with splitting out the scan parts so that instead of hard coded positional search, it
+#           a list of search terms and positions to look for. perhaps a list read from a file.
 #   CHANGE: Does it need to print to screen the whole list on startup (thousands of IPs in my case), or
 #           just add a -v --verbose mode
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
@@ -116,21 +117,11 @@ import configparser #for reading ini file
 
 #from sshkeyboard import listen_keyboard, stop_listening
 
-#import keyboard
-#from subprocess import call
-
 debugmode = False
 
-version = "2023-07-03r0" #really need to update this every time I change something
+version = "2023-07-09r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
-# Initialize ncurses
-#stdscr = curses.initscr()
-#curses.noecho()
-#curses.cbreak()
-#stdscr.keypad(True)    
-# Set nodelay mode to enable non-blocking input
-#stdscr.nodelay(True)
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -216,11 +207,13 @@ def Welcome():
     print('Does some of what other, better, programs do, but worse!\n')
     print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
     print('version: '+version)
-    print("To exit just crash out with ctrl-c, keyboard control over ssh is iffy.")
+    print("To exit use ctrl-c.")
     
 
 #######################
 def GetArgs():
+    #ok, most of this got commented out when i switched to using an ini file.
+    #it remains in case I want to switch back to using command line args
     LogData("getting args")
     global BlockFileName
     global AuthFileName
@@ -280,6 +273,7 @@ def GetArgs():
 
 #######################
 def PrintBlockList():
+    #literally prints out the current blocklist contents
     global aBlocklist
     LogData('printing blocklist')
     for i in range(len(aBlocklist)):
@@ -290,8 +284,8 @@ def PrintBlockList():
 
 #######################
 def CloseGracefully(signal=None, frame=None):
-    LogData('closing...')
     #if ctrl-c is pressed, save iptables and exit
+    LogData('closing...')
     global aBlocklist
     global AuthFileHandle
     global vncExists
@@ -459,21 +453,22 @@ def ScanAndCompare(aline, authtype):
 
 
 #######################
-def authModified():
-    global authlogModtime
-    global AuthFileName
-
-    authModified = False
-
-    if (os.path.isfile(AuthFileName)):
-        if (os.path.getmtime(AuthFileName) != authlogModtime):
-            authlogModtime = os.path.getmtime(AuthFileName)
-            authModified = True
-    else:
-        LogData('auth.log file not found')
-        ErrorArg(2)
-
-    return authModified
+# this appears to be defunct and unused, will remove later
+#def authModified():
+#    global authlogModtime
+#    global AuthFileName
+#
+#    authModified = False
+#
+#    if (os.path.isfile(AuthFileName)):
+#        if (os.path.getmtime(AuthFileName) != authlogModtime):
+#            authlogModtime = os.path.getmtime(AuthFileName)
+#            authModified = True
+#    else:
+#        LogData('auth.log file not found')
+#        ErrorArg(2)
+#
+#    return authModified
 
 
 #######################
@@ -645,6 +640,7 @@ def SaveSettings():
 
 #######################
 def CheckLocalIP(CheckString):
+    #is this ip in the local ip list?
     global aIgnoreIPs
     ret = False
     for i in range(len(aIgnoreIPs)):
@@ -655,7 +651,7 @@ def CheckLocalIP(CheckString):
 
 #######################
 def SplitLocalIP(ipList):
-#split comma separated list of IPs into an array
+    #split comma separated list of IPs into an array
     global aIgnoreIPs
     #aIgnoreIPs = ipList.split(',')
     #use list comprehension to split and strip the list
@@ -795,14 +791,9 @@ def main():
     GetArgs()
     time.sleep(3)
     ClearIPTables()
-    #no longer use try...except...finally, as it was causing issues with ctrl-c, errors should be caught in the functions
-    #try:
     OpenBlockList()
     PrintBlockList()
     OpenLogFilesAsStream()
-    #except:
-        #print('error in main()')
-    #finally:
 
     #should never reach here due to ctrl-c detection
     CloseGracefully()
