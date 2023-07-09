@@ -56,6 +56,7 @@
 # 2023-07-02 ADDED: beginning of implementing vnc log parsing. (scanandcompare() to work on finishing)
 # 2023-07-03 CHANGED: opening logfiles as streams now split to check files exist and try..except to catch errors
 # 2023-07-03 ADDED: settings.ini can now have multiple local IP addresses to ignore, separated by commas
+# 2023-07-09 CHANGED: exception: to exception Exception as e: to catch all non fatals.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -490,8 +491,8 @@ def OpenBlockList():
             with open(BlockFileName, 'rb') as fblockfile:
                 aBlocklist = pickle.load(fblockfile)
             #fblockfile.close() not required with 'with'
-        except:
-            #print('blocklist file is corrupt, will be overwritten on save')
+        except Exception as e:
+            print('Exception: ', e)
             LogData('blocklist file is corrupt, will be overwritten on save')
 
     else:
@@ -533,8 +534,9 @@ def OpenLogFilesAsStream():
             LogData('opening '+AuthFileName)
             AuthFileHandle = open(AuthFileName, 'r')
             authExists = True
-        except:
+        except Exception as e:
             authExists = False
+            print('Exception: ', e)
             LogData(AuthFileName+' error while loading')
     else:
         authExists = False
@@ -546,8 +548,9 @@ def OpenLogFilesAsStream():
             LogData('opening '+vncFileName)
             vncFileHandle = open(vncFileName, 'r')
             vncExists = True
-        except:
+        except Exception as e:
             vncExists = False
+            print('Exception: ', e)
             LogData(vncFileName+' error while loading')
     else:
         vncExists = False
@@ -635,7 +638,8 @@ def SaveSettings():
         with open(iniFileName, 'w') as configfile:
             config.write(configfile)
         configfile.close()
-    except:
+    except Exception as e:
+        print('Exception: ', e)
         LogData('error saving settings.ini')
 
 
