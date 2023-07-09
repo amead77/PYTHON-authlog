@@ -44,6 +44,7 @@
 #   CHANGE: maybe do the same to logging, logfile could end up hueg.
 #   CHANGE: switch from configparser to toml, maybe, maybe not really needed.
 #   CHANGE: I use so many globals in this, I should probably switch to local variables and pass to funcs.
+#   CHANGE: there's a lot of hard coded text, probably should move to a file so translations are possible.
 #
 ####################### [ Changes ] #######################
 # earlier wasn't noted... in fact I rarely noted changes, I really should.
@@ -119,7 +120,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-09r0" #really need to update this every time I change something
+version = "2023-07-09r1" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 
@@ -156,6 +157,9 @@ def ClearScreen():
 #######################
 def ErrorArg(err):
     #prints the error message and exits with the error code
+    #
+    # maybe change this to read from file, so it can be translated?
+    #
     match err:
         case 0:
             print("bye!")
