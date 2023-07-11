@@ -59,6 +59,7 @@
 # 2023-07-03 CHANGED: opening logfiles as streams now split to check files exist and try..except to catch errors
 # 2023-07-03 ADDED: settings.ini can now have multiple local IP addresses to ignore, separated by commas
 # 2023-07-09 CHANGED: exception: to exception Exception as e: to catch all non fatals.
+# 2023-07-11 FIXED: date string read from log could cause ctd if not in correct format. Now substitutes with 2001-01-01 00:00:00
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -120,7 +121,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-09r1" #really need to update this every time I change something
+version = "2023-07-11r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 
@@ -468,24 +469,6 @@ def ScanAndCompare(aline, authtype):
         if newblock:
             DateString = GetDateTime(aline, authtype)
             CheckBlocklist(checkIP, DateString, PassMe)
-
-#######################
-# this appears to be defunct and unused, will remove later
-#def authModified():
-#    global authlogModtime
-#    global AuthFileName
-#
-#    authModified = False
-#
-#    if (os.path.isfile(AuthFileName)):
-#        if (os.path.getmtime(AuthFileName) != authlogModtime):
-#            authlogModtime = os.path.getmtime(AuthFileName)
-#            authModified = True
-#    else:
-#        LogData('auth.log file not found')
-#        ErrorArg(2)
-#
-#    return authModified
 
 
 #######################
