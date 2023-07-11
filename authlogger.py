@@ -377,13 +377,22 @@ def GetDateTime(authstring, authtype):
         case 'auth.log':
             #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
             #always use current year, as auth.log doesn't have year
-            timey = time.strftime('%Y', time.localtime(time.time()))
-            timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
+            try:
+                timey = time.strftime('%Y', time.localtime(time.time()))
+                timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
+            except:
+                timey = "20000101000000"
+    
         case 'vncserver-x11.log':
             #get the 2nd word in authstring, convert to YYYYMMDDHHMMSS
-            timey = authstring.split()[1]
-            timey = timey[:10]+' '+timey[11:19]
-            timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey, "%Y-%m-%d %H:%M:%S"))
+            try:
+                timey = authstring.split()[1]
+                timey = timey[:10]+' '+timey[11:19]
+                timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey, "%Y-%m-%d %H:%M:%S"))
+            except:
+                print('error: '+authstring+'--'+authtype)
+                timey = "20000101000000"
+
     return timey
 
 
@@ -416,7 +425,8 @@ def ScanAndCompare(aline, authtype):
     global localip
     global failcount
     global aIgnoreIPs
-
+    #global AuthPos
+    DateString = ''
     newblock = False
     #check if aline is in the array of aIgnoreIPs
     
@@ -440,12 +450,12 @@ def ScanAndCompare(aline, authtype):
                 if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
                     newblock = True
                     checkIP = tmp[len(tmp)-5]
-                if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(auth.log) '+aline[16:])
 
                 if (aline.find('Unable to negotiate',) >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
                     newblock = True
                     checkIP = tmp[9]
-                if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(auth.log) '+aline[16:])
+                if newblock: PassMe = '(auth.log) '+aline[16:]
+                #if newblock: CheckBlocklist(checkIP, DateString, '(auth.log:'+str(AuthPos) +') '+aline[16:])
 
             case 'vncserver-x11.log':
                 if aline.find('[AuthFailure]') >= 0:
@@ -453,8 +463,11 @@ def ScanAndCompare(aline, authtype):
                     tmp = aline.split(' ')
                     checkIP = tmp[6]
                     checkIP = checkIP.split('::')[0]
-                if newblock: CheckBlocklist(checkIP, GetDateTime(aline, authtype), '(vncserver-x11.log) '+aline[30:])
-
+                if newblock: PassMe = '(vncserver-x11.log) '+aline[30:]
+                #if newblock: CheckBlocklist(checkIP, DateString, '(vncserver-x11.log:'+str(AuthPos) +') '+aline[30:])
+        if newblock:
+            DateString = GetDateTime(aline, authtype)
+            CheckBlocklist(checkIP, DateString, PassMe)
 
 #######################
 # this appears to be defunct and unused, will remove later
