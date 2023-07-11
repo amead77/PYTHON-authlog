@@ -60,6 +60,7 @@
 # 2023-07-03 ADDED: settings.ini can now have multiple local IP addresses to ignore, separated by commas
 # 2023-07-09 CHANGED: exception: to exception Exception as e: to catch all non fatals.
 # 2023-07-11 FIXED: date string read from log could cause ctd if not in correct format. Now substitutes with 2001-01-01 00:00:00
+# 2023-07-11 ADDED: some more exception handling, removed some globals.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -121,7 +122,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-11r0" #really need to update this every time I change something
+version = "2023-07-11r1" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 
@@ -543,7 +544,8 @@ def OpenLogFilesAsStream():
     global VNCPos
     global authExists
     global vncExists
-
+    AuthPos = 0
+    VNCPos = 0
     iFlush = 0 #flush log data every 10 seconds (approx)
 
     if (os.path.isfile(AuthFileName)):
@@ -700,10 +702,13 @@ def LoadSettings():
             config.read(iniFileName)
             # Access the settings
             localip = config.get('Settings','localip', fallback='192.168.')
-            BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.txt')
+            BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
             AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
             fc = config.get('Settings','failcount', fallback= '2')
-            failcount = int(fc)
+            try:
+                failcount = int(fc)
+            except ValueError:
+                failcount = 2
             vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.txt')
             # show me the settings
             LogData("loaded settings.ini:")
@@ -715,7 +720,7 @@ def LoadSettings():
     else:
         LogData('settings.ini not found, using defaults:')
         localip = '192.168.'
-        BlockFileName = StartDir+slash+'blocklist.txt'
+        BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = '/var/log/auth.log'
         failcount = 2
         vncFileName = '/var/log/vncserver-x11.txt'
@@ -782,20 +787,8 @@ def main():
     
     ClearScreen()
     
-    global localip
     global StartDir
-    global blockcount
-    global BlockFileName
-    global AuthFileName
     global debugmode
-    global AuthPos
-    global AuthFileHandle
-    global LogFileName
-    global vncFileName
-    global vncFileHandle
-    global VNCPos
-    VNCPos = 0
-    AuthPos = 0
     global slash
     slash = '/'
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
@@ -806,7 +799,6 @@ def main():
         slash = '\\'
         debugmode = True
         
-    rebuild = False
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
     Welcome()
