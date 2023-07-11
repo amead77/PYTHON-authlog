@@ -339,7 +339,25 @@ def FirstRunCheckBlocklist():
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
             BlockIP(aBlocklist[x].ip)
             #print('blocking: "'+aBlocklist[x].ip+'"')
-    
+
+
+#######################
+def IsValidIP(ip):
+    #check if ip is valid ipv4 address
+    ret = False
+    if ip.count('.') == 3:
+        tmp = ip.split('.')
+        if len(tmp) == 4:
+            for x in range(len(tmp)):
+                #why this not work?
+                #ret = True if tmp[x].isnumeric() else False; break
+                if tmp[x].isnumeric():
+                    ret = True
+                else:
+                    ret = False
+                    break
+    return ret
+
 
 #######################
 def CheckBlocklist(ip, timeblocked, reason):
@@ -348,6 +366,10 @@ def CheckBlocklist(ip, timeblocked, reason):
     global aBlocklist
     foundit = False
     dtfound = -1
+    
+    if not IsValidIP(ip): 
+        return
+
     for x in range(0, len(aBlocklist)):
         if aBlocklist[x].ip == ip:
             dtfound = x
