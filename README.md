@@ -12,9 +12,7 @@ If you're not willing to live on the edge, go use fail2ban, it is probably more 
  if the number of failed attempts is >= failcount.
 
  currently in use on my RPi because it's always connected and powered on. Every day people try to log in.
- at various points I've tried to implement keyboard input, but over shh (even with sshkeyboard)
- it breaks due to blocking input. curses can suck my dick as that solves one problem by introducing another.
-
+ 
  This came about because I didn't want to learn Fail2ban and wanted a real project to learn Python better.
  I am sure fail2ban is much more feature full and whatnot, but I didn't want a client-server setup, just
  a simple press-and-go script.
