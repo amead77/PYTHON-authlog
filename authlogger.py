@@ -221,67 +221,21 @@ def Welcome():
 
 #######################
 def GetArgs():
-    #ok, most of this got commented out when i switched to using an ini file.
+    #ok, most of this got removed when i switched to using an ini file.
     #it remains in case I want to switch back to using command line args
     LogData("getting args")
-    #global BlockFileName
-    #global AuthFileName
-    #global blockcount
-    #global localip
-    #global failcount
+
     global iniFileName
     global StartDir
     global slash
     global LogOnOff
     
-    #failure = False
-#    loadsettingsstatus = False
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
-#    parser.add_argument('-a', '--AuthFileName', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
-#    parser.add_argument('-b', '--BlockFileName', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
-#    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
-#    parser.add_argument('-i', '--iniFileName', action='store', help='.ini file and path', default='')
-#    parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
     args = parser.parse_args()
     LogOnOff = args.nolog
-
-    #load the ini file before anything else, so it can be overwritten by command line args
-    #iniFileName = args.iniFileName
-    #if iniFileName != '':
-    #    loadsettingsstatus = LoadSettings()
-
-    
-    
-#    if (args.AuthFileName != parser.get_default("AuthFileName")) or (loadsettingsstatus == False):
-#        AuthFileName = args.AuthFileName
-
-#    if (args.BlockFileName != parser.get_default("BlockFileName")) or (loadsettingsstatus == False):
-#        BlockFileName = args.BlockFileName
-    
-#    if (args.localip != parser.get_default("localip")) or (loadsettingsstatus == False):
-#        localip = args.localip
-
-#    if (args.failcount != parser.get_default("failcount")) or (loadsettingsstatus == False):
-#        failcount = args.failcount
-
-#    if AuthFileName == '': ErrorArg(2)
-#    if BlockFileName == '': ErrorArg(2)
-#    if failcount < 1: ErrorArg(2)
-#    if localip == '': ErrorArg(2)
-
     iniFileName = StartDir+slash+"settings.ini"
-
-
     if not LoadSettings(): ErrorArg(8)
-
-    #if debugmode:
-    #    AuthFileName = StartDir+slash+"auth.log"
-    
-    #if not os.path.isfile(AuthFileName): ErrorArg(7)
-
-    #blockcount = FileLineCount(BlockFileName) #change this, no longer just a line per ip
-    #authlinecount = FileLineCount(AuthFileName)
 
 
 #######################
@@ -555,7 +509,7 @@ def OpenLogFilesAsStream():
     VNCPos = 0
     iFlush = 0 #flush log data every 10 seconds (approx)
 
-    if (os.path.isfile(AuthFileName)):
+    if authExists:
         try:
             LogData('opening '+AuthFileName)
             AuthFileHandle = open(AuthFileName, 'r')
@@ -564,12 +518,8 @@ def OpenLogFilesAsStream():
             authExists = False
             print('Exception: ', e)
             LogData(AuthFileName+' error while loading')
-    else:
-        authExists = False
-        LogData(AuthFileName+' file not found')
-        #ErrorArg(2)
 
-    if (os.path.isfile(vncFileName)):
+    if vncExists:
         try:
             LogData('opening '+vncFileName)
             vncFileHandle = open(vncFileName, 'r')
@@ -578,12 +528,8 @@ def OpenLogFilesAsStream():
             vncExists = False
             print('Exception: ', e)
             LogData(vncFileName+' error while loading')
-    else:
-        vncExists = False
-        LogData(vncFileName+' file not found')
-        #ErrorArg(2)
     
-    if not (authExists and vncExists): ErrorArg(10) #if either file doesn't exist, exit, why else are we running?
+    if not (authExists and vncExists): ErrorArg(10) #if neither file exists, exit, why else are we running?
     
     #
     # aahh.. problem. if one of the files doesn't exist, what then...?
@@ -700,6 +646,8 @@ def LoadSettings():
     global failcount
     global vncFileName
     global iniFileName
+    global authExists
+    global vncExists
 
     LogData('loading settings')
     rt = False
@@ -733,12 +681,15 @@ def LoadSettings():
         vncFileName = '/var/log/vncserver-x11.txt'
         rt = True
 
+    authExists = True if (os.path.isfile(AuthFileName)) else False
+    vncExists = True if (os.path.isfile(vncFileName)) else False
+
     LogData(f"localip(ini): {localip}")
     SplitLocalIP(localip)
     LogData(f"blockfile: {BlockFileName}")
-    LogData(f"authfile: {AuthFileName}")
+    if authExists: LogData(f"authfile: {AuthFileName}")
+    if vncExists: LogData(f"vncfile: {vncFileName}")
     LogData(f"failcount: {failcount}")
-    LogData(f"vncfile: {vncFileName}")
 
 
     return rt
