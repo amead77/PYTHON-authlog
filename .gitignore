@@ -9,3 +9,10 @@ vncserver-x11.log
 blocklist.dat
 .VSCodeCounter/
 __pycache__/
+*
+!.gitignore
+!authlogger.py
+!list_blocks.py
+!import_blocks.py
+!settings.ini
+!README.md
