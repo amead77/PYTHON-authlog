@@ -61,6 +61,8 @@
 # 2023-07-09 CHANGED: exception: to exception Exception as e: to catch all non fatals.
 # 2023-07-11 FIXED: date string read from log could cause ctd if not in correct format. Now substitutes with 2001-01-01 00:00:00
 # 2023-07-11 ADDED: some more exception handling, removed some globals.
+# 2023-07-12 CHANGED: cleaning up, checking for possible exceptions.
+# 2023-07-12 ADDED: -n/--nolog option to not log to file, just print to screen.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -122,7 +124,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-11r1" #really need to update this every time I change something
+version = "2023-07-12r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 
@@ -186,6 +188,8 @@ def ErrorArg(err):
             print("vnc log file not found.")
         case 10:
             print("neither auth.log nor vnc log file found/loaded.")
+        case 11:
+            print("for some reason, end of main() was reached. This should not have happened :(")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -195,7 +199,6 @@ def ErrorArg(err):
 def CheckIsLinux():
     #this is because it is designed to run on Linux, but I also code on Windows, in which case I don't want it to run all the code
     if not sys.platform.startswith('linux'):
-        debugmode = True
         return False
     else:
         return True
@@ -221,23 +224,27 @@ def GetArgs():
     #ok, most of this got commented out when i switched to using an ini file.
     #it remains in case I want to switch back to using command line args
     LogData("getting args")
-    global BlockFileName
-    global AuthFileName
-    global blockcount
-    global localip
-    global failcount
+    #global BlockFileName
+    #global AuthFileName
+    #global blockcount
+    #global localip
+    #global failcount
     global iniFileName
     global StartDir
     global slash
+    global LogOnOff
+    
     #failure = False
 #    loadsettingsstatus = False
-#    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
 #    parser.add_argument('-a', '--AuthFileName', action='store', help='auth.log file incl. path', default='/var/log/auth.log')
 #    parser.add_argument('-b', '--BlockFileName', action='store', help='blocklist file, incl. path', default=StartDir+slash+'blocklist.txt')
 #    parser.add_argument('-f', '--failcount', action='store', type=int, help='number of login failures to block IP (defaults to 2)', default=1)
 #    parser.add_argument('-i', '--iniFileName', action='store', help='.ini file and path', default='')
 #    parser.add_argument('-l', '--localip', action='store', help='local IP range to ignore (default 192.168.)', default='192.168.')
-#    args = parser.parse_args()
+    args = parser.parse_args()
+    LogOnOff = args.nolog
 
     #load the ini file before anything else, so it can be overwritten by command line args
     #iniFileName = args.iniFileName
@@ -264,12 +271,12 @@ def GetArgs():
 #    if localip == '': ErrorArg(2)
 
     iniFileName = StartDir+slash+"settings.ini"
-    
+
 
     if not LoadSettings(): ErrorArg(8)
 
-    if debugmode:
-        AuthFileName = StartDir+slash+"auth.log"
+    #if debugmode:
+    #    AuthFileName = StartDir+slash+"auth.log"
     
     #if not os.path.isfile(AuthFileName): ErrorArg(7)
 
@@ -742,6 +749,12 @@ def OpenLogFile():
     global LogFileName
     global logFileHandle
     global slash
+    global LogOnOff
+    
+    if not LogOnOff:
+        print('-- logging to file is off --')
+        return
+
     if not os.path.isdir(StartDir + slash + 'logs'):
         os.mkdir(StartDir + slash + 'logs')
     LogFileName = StartDir + slash + 'logs' + slash + 'authlogger.log'
@@ -755,11 +768,13 @@ def OpenLogFile():
 
 #######################
 def LogData(sdata):
-    #write timestamp+sdata to logfile, then flush to disk
+    #write timestamp+sdata to logfile
     global logFileHandle
+    global LogOnOff
+    
     print('['+TimeStamp()+']:'+sdata)
-    logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
-    #logFileHandle.flush()
+    if LogOnOff:
+        logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
 
 
 #######################
@@ -770,6 +785,10 @@ def TimeStamp():
 #######################
 def CloseLogFile():
     global logFileHandle
+    global LogOnOff
+    
+    if not LogOnOff:
+        return
     LogData('authlogger stopped.\n')
     logFileHandle.close()
 
@@ -777,6 +796,10 @@ def CloseLogFile():
 #######################
 def FlushLogFile():
     global logFileHandle
+    global LogOnOff
+    
+    if not LogOnOff:
+        return
     logFileHandle.flush()
 
 
@@ -786,11 +809,12 @@ def FlushLogFile():
 def main():
     
     ClearScreen()
-    
+    global LogOnOff
     global StartDir
     global debugmode
     global slash
     slash = '/'
+    LogOnOff = True
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
 
 
@@ -811,7 +835,7 @@ def main():
 
     #should never reach here due to ctrl-c detection
     CloseGracefully()
-    ErrorArg(0)
+    ErrorArg(11)
     sys.exit(255)
 
 if __name__ == '__main__':
