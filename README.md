@@ -19,8 +19,7 @@ If you're not willing to live on the edge, go use fail2ban, it is probably more 
  I am sure fail2ban is much more feature full and whatnot, but I didn't want a client-server setup, just
  a simple press-and-go script.
  Anyway, this does what I need it to do, keep out the bots trying default/popular passwords.
-
- 
+  
  Initially it only needs a few things.
  1. either auth.log file, which is usually in /var/log/auth.log, or vncserver-x11.log, which is usually in /var/log/vncserver-x11.log
  2. this file, run as sudo root.
@@ -31,3 +30,6 @@ If you're not willing to live on the edge, go use fail2ban, it is probably more 
     attaching to the tmux session. Or I can look at the logfile from anywhere.
  6. Python >= 3.10 due to match/case.
  7. Check settings.ini if you want to change the default settings.
+
+
+If testing on Windows, put a auth.log or vncserver-x11.log file in the same directory, as on windows it goes to debug mode and uses local files for testing without trying iptables.
