@@ -63,6 +63,7 @@
 # 2023-07-11 ADDED: some more exception handling, removed some globals.
 # 2023-07-12 CHANGED: cleaning up, checking for possible exceptions.
 # 2023-07-12 ADDED: -n/--nolog option to not log to file, just print to screen.
+# 2023-07-12 CHANGED: if adding a new block, updates the blocklist file (within 10s) rather than waiting for ctrl-c
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -124,7 +125,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-12r0" #really need to update this every time I change something
+version = "2023-07-15r0" #really need to update this every time I change something
 #2023-02-12 21:37:26
 
 
@@ -354,7 +355,7 @@ def CheckBlocklist(ip, timeblocked, reason):
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
             if failcount == 1: #if failcount is 1, block on first failure
                 BlockIP(ip)
-        
+    return True if not foundit else False        
 
 #######################
 def GetDateTime(authstring, authtype):
@@ -452,8 +453,8 @@ def ScanAndCompare(aline, authtype):
                 #if newblock: CheckBlocklist(checkIP, DateString, '(vncserver-x11.log:'+str(AuthPos) +') '+aline[30:])
         if newblock:
             DateString = GetDateTime(aline, authtype)
-            CheckBlocklist(checkIP, DateString, PassMe)
-
+            newblock = CheckBlocklist(checkIP, DateString, PassMe)
+    return newblock
 
 #######################
 def OpenBlockList():
@@ -505,6 +506,7 @@ def OpenLogFilesAsStream():
     global VNCPos
     global authExists
     global vncExists
+    NewBlocks = False
     AuthPos = 0
     VNCPos = 0
     iFlush = 0 #flush log data every 10 seconds (approx)
@@ -540,6 +542,9 @@ def OpenLogFilesAsStream():
         if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
             iFlush = 0
             FlushLogFile()
+            if NewBlocks: 
+                SaveBlockList()
+                NewBlocks = False
 
         if authExists:
             alogsize = os.stat(AuthFileName).st_size
@@ -558,7 +563,7 @@ def OpenLogFilesAsStream():
                 # Process the new lines
                 lines = new_data.split('\n')
                 for line in lines:
-                    ScanAndCompare(line, 'auth.log')
+                    NewBlocks = ScanAndCompare(line, 'auth.log')
                         
                 # Update the initial size to the current size
                 AuthPos = alogsize
@@ -575,7 +580,7 @@ def OpenLogFilesAsStream():
                 # Process the new lines
                 lines = new_data.split('\n')
                 for line in lines:
-                    ScanAndCompare(line, 'vncserver-x11.log')
+                    NewBlocks = ScanAndCompare(line, 'vncserver-x11.log')
                         
                 # Update the initial size to the current size
                 VNCPos = vnclogsize
