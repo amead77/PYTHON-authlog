@@ -13,7 +13,7 @@
 #
 # the actual firewall rule setting is: 'iptables -I INPUT -s <IP> -j DROP'
 #
-# currently (as per below 3 lines from auth.log, 4th is vnc log) an invalid user can create a double match,
+# currently (as per below 3 lines from auth.log, 5th is vnc log) an invalid user can create a double match,
 # as the system will log the invalid user, and the invalid password for invalid user. Not sure if I should
 # adjust as f*** anyone trying dodgy names ;)
 # Jun 28 03:26:42 whitebox sshd[776616]: Failed password for invalid user ubuntu from 118.36.15.126 port 61324 ssh2
@@ -64,6 +64,8 @@
 # 2023-07-12 CHANGED: cleaning up, checking for possible exceptions.
 # 2023-07-12 ADDED: -n/--nolog option to not log to file, just print to screen.
 # 2023-07-12 CHANGED: if adding a new block, updates the blocklist file (within 10s) rather than waiting for ctrl-c
+# 2023-07-16 FIXED: blocklist update delay was not working, now fixed.
+# 2023-07-28 ADDED: sigterm handler to close gracefully on shutdown, I hope.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -125,9 +127,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-15r0" #really need to update this every time I change something
-#2023-02-12 21:37:26
-
+version = "2023-07-28r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -229,12 +229,12 @@ def GetArgs():
     global iniFileName
     global StartDir
     global slash
-    global LogOnOff
+    global Logging
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
     args = parser.parse_args()
-    LogOnOff = args.nolog
+    Logging = args.nolog
     iniFileName = StartDir+slash+"settings.ini"
     if not LoadSettings(): ErrorArg(8)
 
@@ -248,6 +248,11 @@ def PrintBlockList():
         LogData(aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].aDateTime)):
             LogData('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" reason: "+aBlocklist[i].aReason[x])
+
+
+#######################
+def SaveIPTables():
+    subprocess.call(['/sbin/iptables-save'])
 
 
 #######################
@@ -265,8 +270,7 @@ def CloseGracefully(signal=None, frame=None):
     SaveBlockList()
     SaveSettings()
     CloseLogFile()
-    if not debugmode:
-        subprocess.call(['/sbin/iptables-save'])
+    if not debugmode: SaveIPTables()
     ErrorArg(0)
 
 
@@ -355,7 +359,10 @@ def CheckBlocklist(ip, timeblocked, reason):
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
             if failcount == 1: #if failcount is 1, block on first failure
                 BlockIP(ip)
-    return True if not foundit else False        
+    foundit = True if not foundit else False
+    if debugmode:
+        if foundit: print("CBL-foundit")
+    return foundit
 
 #######################
 def GetDateTime(authstring, authtype):
@@ -454,6 +461,8 @@ def ScanAndCompare(aline, authtype):
         if newblock:
             DateString = GetDateTime(aline, authtype)
             newblock = CheckBlocklist(checkIP, DateString, PassMe)
+            if debugmode:
+                if newblock: print("SAC-newblock")
     return newblock
 
 #######################
@@ -507,6 +516,7 @@ def OpenLogFilesAsStream():
     global authExists
     global vncExists
     NewBlocks = False
+    BlockStatus = False
     AuthPos = 0
     VNCPos = 0
     iFlush = 0 #flush log data every 10 seconds (approx)
@@ -542,9 +552,11 @@ def OpenLogFilesAsStream():
         if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
             iFlush = 0
             FlushLogFile()
-            if NewBlocks: 
+            if BlockStatus: 
+                if debugmode:
+                    print('OLAS-New blocks added to blocklist file')
                 SaveBlockList()
-                NewBlocks = False
+                BlockStatus = False
 
         if authExists:
             alogsize = os.stat(AuthFileName).st_size
@@ -564,7 +576,7 @@ def OpenLogFilesAsStream():
                 lines = new_data.split('\n')
                 for line in lines:
                     NewBlocks = ScanAndCompare(line, 'auth.log')
-                        
+                    if NewBlocks: BlockStatus = True
                 # Update the initial size to the current size
                 AuthPos = alogsize
             elif alogsize < AuthPos: #log was rotated
@@ -581,6 +593,7 @@ def OpenLogFilesAsStream():
                 lines = new_data.split('\n')
                 for line in lines:
                     NewBlocks = ScanAndCompare(line, 'vncserver-x11.log')
+                    if NewBlocks: BlockStatus = True
                         
                 # Update the initial size to the current size
                 VNCPos = vnclogsize
@@ -705,9 +718,9 @@ def OpenLogFile():
     global LogFileName
     global logFileHandle
     global slash
-    global LogOnOff
+    global Logging
     
-    if not LogOnOff:
+    if not Logging:
         print('-- logging to file is off --')
         return
 
@@ -719,17 +732,17 @@ def OpenLogFile():
     except:
         print('error opening logfile')
         ErrorArg(5)
-    logFileHandle.write('authlogger started.\n')
+    LogData('authlogger started.')
 
 
 #######################
 def LogData(sdata):
     #write timestamp+sdata to logfile
     global logFileHandle
-    global LogOnOff
+    global Logging
     
     print('['+TimeStamp()+']:'+sdata)
-    if LogOnOff:
+    if Logging:
         logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
 
 
@@ -741,9 +754,9 @@ def TimeStamp():
 #######################
 def CloseLogFile():
     global logFileHandle
-    global LogOnOff
+    global Logging
     
-    if not LogOnOff:
+    if not Logging:
         return
     LogData('authlogger stopped.\n')
     logFileHandle.close()
@@ -752,9 +765,9 @@ def CloseLogFile():
 #######################
 def FlushLogFile():
     global logFileHandle
-    global LogOnOff
+    global Logging
     
-    if not LogOnOff:
+    if not Logging:
         return
     logFileHandle.flush()
 
@@ -765,15 +778,15 @@ def FlushLogFile():
 def main():
     
     ClearScreen()
-    global LogOnOff
+    global Logging
     global StartDir
     global debugmode
     global slash
     slash = '/'
-    LogOnOff = True
+    Logging = True
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
-
-
+    signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
+    
     if not CheckIsLinux():
         print("not linux, so going into debug mode")
         slash = '\\'
