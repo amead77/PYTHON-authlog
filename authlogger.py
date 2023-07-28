@@ -13,7 +13,7 @@
 #
 # the actual firewall rule setting is: 'iptables -I INPUT -s <IP> -j DROP'
 #
-# currently (as per below 3 lines from auth.log, 4th is vnc log) an invalid user can create a double match,
+# currently (as per below 3 lines from auth.log, 5th is vnc log) an invalid user can create a double match,
 # as the system will log the invalid user, and the invalid password for invalid user. Not sure if I should
 # adjust as f*** anyone trying dodgy names ;)
 # Jun 28 03:26:42 whitebox sshd[776616]: Failed password for invalid user ubuntu from 118.36.15.126 port 61324 ssh2
@@ -65,6 +65,7 @@
 # 2023-07-12 ADDED: -n/--nolog option to not log to file, just print to screen.
 # 2023-07-12 CHANGED: if adding a new block, updates the blocklist file (within 10s) rather than waiting for ctrl-c
 # 2023-07-16 FIXED: blocklist update delay was not working, now fixed.
+# 2023-07-28 ADDED: sigterm handler to close gracefully on shutdown, I hope.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -126,9 +127,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-16r1" #really need to update this every time I change something
-#2023-02-12 21:37:26
-
+version = "2023-07-28r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -230,12 +229,12 @@ def GetArgs():
     global iniFileName
     global StartDir
     global slash
-    global LogOnOff
+    global Logging
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
     args = parser.parse_args()
-    LogOnOff = args.nolog
+    Logging = args.nolog
     iniFileName = StartDir+slash+"settings.ini"
     if not LoadSettings(): ErrorArg(8)
 
@@ -719,9 +718,9 @@ def OpenLogFile():
     global LogFileName
     global logFileHandle
     global slash
-    global LogOnOff
+    global Logging
     
-    if not LogOnOff:
+    if not Logging:
         print('-- logging to file is off --')
         return
 
@@ -740,10 +739,10 @@ def OpenLogFile():
 def LogData(sdata):
     #write timestamp+sdata to logfile
     global logFileHandle
-    global LogOnOff
+    global Logging
     
     print('['+TimeStamp()+']:'+sdata)
-    if LogOnOff:
+    if Logging:
         logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
 
 
@@ -755,9 +754,9 @@ def TimeStamp():
 #######################
 def CloseLogFile():
     global logFileHandle
-    global LogOnOff
+    global Logging
     
-    if not LogOnOff:
+    if not Logging:
         return
     LogData('authlogger stopped.\n')
     logFileHandle.close()
@@ -766,9 +765,9 @@ def CloseLogFile():
 #######################
 def FlushLogFile():
     global logFileHandle
-    global LogOnOff
+    global Logging
     
-    if not LogOnOff:
+    if not Logging:
         return
     logFileHandle.flush()
 
@@ -779,15 +778,15 @@ def FlushLogFile():
 def main():
     
     ClearScreen()
-    global LogOnOff
+    global Logging
     global StartDir
     global debugmode
     global slash
     slash = '/'
-    LogOnOff = True
+    Logging = True
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
-
-
+    signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
+    
     if not CheckIsLinux():
         print("not linux, so going into debug mode")
         slash = '\\'
