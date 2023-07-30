@@ -66,6 +66,7 @@
 # 2023-07-12 CHANGED: if adding a new block, updates the blocklist file (within 10s) rather than waiting for ctrl-c
 # 2023-07-16 FIXED: blocklist update delay was not working, now fixed.
 # 2023-07-28 ADDED: sigterm handler to close gracefully on shutdown, I hope.
+# 2023-07-30 ADDED: when adding a datetime to existing IP, show which array index it is.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -127,7 +128,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-28r0" #really need to update this every time I change something
+version = "2023-07-30r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -347,7 +348,7 @@ def CheckBlocklist(ip, timeblocked, reason):
 
     if not foundit:
         if dtfound >= 0:
-            LogData('adding datetime: '+ip+' ['+reason+']')
+            LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
             if len(aBlocklist[dtfound].aDateTime) >= failcount:
