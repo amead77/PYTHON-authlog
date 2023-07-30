@@ -128,7 +128,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-30r0" #really need to update this every time I change something
+version = "2023-07-30r1" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -246,7 +246,7 @@ def PrintBlockList():
     global aBlocklist
     LogData('printing blocklist')
     for i in range(len(aBlocklist)):
-        LogData(aBlocklist[i].ip+':')
+        LogData('['+str(i)+'] '+aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].aDateTime)):
             LogData('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" reason: "+aBlocklist[i].aReason[x])
 

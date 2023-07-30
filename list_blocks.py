@@ -30,7 +30,7 @@ def PrintBlockList():
     global aBlocklist
     print('printing blocklist')
     for i in range(len(aBlocklist)):
-        print(aBlocklist[i].ip+':')
+        print('['+str(i)+'] '+aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].aDateTime)):
             print('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" reason: "+aBlocklist[i].aReason[x])
 
