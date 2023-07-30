@@ -347,7 +347,7 @@ def CheckBlocklist(ip, timeblocked, reason):
 
     if not foundit:
         if dtfound >= 0:
-            LogData('adding datetime: '+ip+' ['+reason+']')
+            LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
             if len(aBlocklist[dtfound].aDateTime) >= failcount:
