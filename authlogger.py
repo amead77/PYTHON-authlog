@@ -70,44 +70,13 @@
 # 2023-08-06 ADDED: restart time, so it can be restarted at a specific time of day. (in conjunction with bash script looping it)
 #                   This is because I noticed some weirdness with the log file, seems after some days it just stopped blocking.
 #                   Restarting it every day should fix that until I know why.
+# 2023-08-06 CHANGED: split OpenLogFilesAsStream() into 4 funcs, OpenAuthAsStream(), OpenVNCAsStream(), CheckAuthLog(), CheckVNCLog()
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
 # If the number of datetime entries is >= failcount, then send to IPTables to add to firewall rules.
 #
 
-####################### [ Code order ] #######################
-# in simple terms the main order of code is:
-# Create cBlock class, used as a record/struct
-# create aBlocklist[] which becomes and array of cBlock class
-# create aActiveBlocklist[] which is an array of IP addresses that are actually blocked.
-# main() which is at the bottom
-#   ClearScreen()
-#   set ctrl-c detection
-#   set global variables and check if running on linux, if not go into debug mode (doesn't actually send to iptables in debug mode)
-#   OpenLogFile() to initialise the log file for sending data to (also prints to screen on logging)
-#   Welcome() to show welcome text, duh..
-#   GetArgs() to get command line arguments. Ignored now, loads ini file instead.
-#   ClearIPTables() to clear out IPTables rules before setting any new ones
-#   OpenBlocklist() to load the blocklist file into memory
-#     FirstRunCheckBlocklist() to block any IPs already in the blocklist file if the number of datetime entries is >= failcount
-#   PrintBlockList() to print the current blocklist to screen and log file
-#   OpenLogFilesAsStream() to open the auth.log file as a stream, once opened stay in this function until ctrl-c
-#      #Every time authlog gets new data, split it into lines and process each line by sending to ScanAndCompare()
-#      #ScanAndCompare() checks if the line is a failed login attempt, if it is, it sends the IP to CheckBlocklist()
-#    CheckBlocklist() checks if the IP is already in the blocklist aBlocklist[], if yes and unique, it adds the datetime to the cBlock object, else
-#      #if the IP is not in the blocklist, it adds the IP to the aBlocklist[].
-#      #if the number of datetime entries in the cBlock object of aBlocklist[] is >= failcount, it sends the IP to BlockIP()
-#      BlockIP() sends the IP to iptables to be blocked, and adds the IP to aActiveBlocklist[] to keep track of what is currently blocked
-#      #if Ctrl-C is detected, jump to: CloseGracefully()
-# CloseGracefully() to close the auth.log stream and save the blocklist to file
-#   SaveBlocklist() to save the blocklist aBlocklist[] to file
-#   SaveSettings() to save the settings to ini file
-#   CloseLogFile() to close the log file
-#   assuming not in debug mode, save IPTables rules
-#   ErrorArg()
-# ErrorArg() to print error/exit message and exit
-#
 
 ####################### [ Coding Style ] #######################
 # I literally write this using camel case, snake case, pascal case, and whatever else I feel like at the time.
@@ -131,7 +100,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-06r1" #really need to update this every time I change something
+version = "2023-08-06r2" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -196,7 +165,11 @@ def ErrorArg(err):
         case 11:
             print("for some reason, end of main() was reached. This should not have happened :(")
         case 12:
-            print("Exiting because restart time is met.")
+            print("Exiting because restart time is met.") 
+        case 13:
+            print("Ctrl-C detected, exiting gracefully.") #need to figure out how to pass from signal
+        case 14:
+            print("Shutdown demanded")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -262,7 +235,7 @@ def SaveIPTables():
 
 
 #######################
-def CloseGracefully(signal=None, frame=None, exitcode=None):
+def CloseGracefully(signal=None, frame=None, exitcode=0):
     #if ctrl-c is pressed, save iptables and exit
     LogData('closing...')
     global aBlocklist
@@ -563,7 +536,6 @@ def OpenVNCAsStream():
 #######################
 def CheckAuthLog():
     #checks if auth.log updated, if so read in and check for new login failures
-    LogData('opening logfiles as stream')
     global AuthFileName
     global AuthPos
     global AuthFileHandle
@@ -635,7 +607,7 @@ def OpenLogFilesAsStream():
     global vncExists
 
     iFlush = 0 #flush log data every 10 seconds (approx)
-    runwhich = 4 #every 4th time, check for new blocks
+    runwhich = 4 #every 4th (0.25*4=1 sec) time, check for new blocks
     runnow = 0 #current run count
     authBlocks = False
     vncBlocks = False
@@ -857,8 +829,8 @@ def main():
     global slash
     slash = '/'
     Logging = True
-    signal.signal(signal.SIGINT, CloseGracefully, exitcode = 0) #ctrl-c detection
-    signal.signal(signal.SIGTERM, CloseGracefully, exitcode = 0) #shutdown detection
+    signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
+    signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
     
     if not CheckIsLinux():
         print("not linux, so going into debug mode")
