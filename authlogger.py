@@ -131,7 +131,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-06r0" #really need to update this every time I change something
+version = "2023-08-06r1" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -262,7 +262,7 @@ def SaveIPTables():
 
 
 #######################
-def CloseGracefully(signal=None, frame=None):
+def CloseGracefully(signal=None, frame=None, exitcode=None):
     #if ctrl-c is pressed, save iptables and exit
     LogData('closing...')
     global aBlocklist
@@ -277,24 +277,8 @@ def CloseGracefully(signal=None, frame=None):
     SaveSettings()
     CloseLogFile()
     if not debugmode: SaveIPTables()
-    ErrorArg(0)
+    if exitcode is not None: ErrorArg( exitcode )
 
-def CloseDisgrafully():
-    #any other reason to close, save iptables and exit
-    LogData('closing...')
-    global aBlocklist
-    global AuthFileHandle
-    global vncExists
-    global authExists
-    #AuthFileHandle.close() #not requred, as with statement closes it automatically
-    LogData('closing streams')
-    if vncExists: vncFileHandle.close()
-    if authExists: AuthFileHandle.close()
-    SaveBlockList()
-    SaveSettings()
-    CloseLogFile()
-    if not debugmode: SaveIPTables()
-    #doesn't exit, that should be called from the calling function
 
 #######################
 def BlockIP(ip):
@@ -535,62 +519,140 @@ def CheckRestartTime():
     if ntime == restart_time:
         LogData('restarting at '+ntime)
         if not debugmode:
-            CloseDisgrafully()
-            ErrorArg(12)
+            CloseGracefully(exitcode=12)
         else:
             print('RESTART/debug mode: restarting at '+ntime)
               
 
-################################################################################################
-# This is the main function loop, it reads the log file and calls ScanAndCompare for each line #
-################################################################################################
-def OpenLogFilesAsStream():
+#######################
+def OpenAuthAsStream():
+    #opens the auth.log file as a stream
+    global AuthFileName
+    global AuthPos
+    global AuthFileHandle
+    global authExists
+
+    try:
+        LogData('opening '+AuthFileName)
+        AuthFileHandle = open(AuthFileName, 'r')
+        authExists = True
+    except Exception as e:
+        authExists = False
+        print('Exception: ', e)
+        LogData(AuthFileName+' error while loading')
+
+
+#######################
+def OpenVNCAsStream():
+    #opens the vncserver-x11.log file as a stream
+    global vncFileName
+    global VNCPos
+    global vncFileHandle
+    global vncExists
+
+    try:
+        LogData('opening '+vncFileName)
+        vncFileHandle = open(vncFileName, 'r')
+        vncExists = True
+    except Exception as e:
+        vncExists = False
+        print('Exception: ', e)
+        LogData(vncFileName+' error while loading') 
+
+
+#######################
+def CheckAuthLog():
+    #checks if auth.log updated, if so read in and check for new login failures
     LogData('opening logfiles as stream')
     global AuthFileName
     global AuthPos
     global AuthFileHandle
-    global vncFileName
-    global vncFileHandle
-    global VNCPos
-    global authExists
-    global vncExists
     NewBlocks = False
     BlockStatus = False
     AuthPos = 0
+
+    alogsize = os.stat(AuthFileName).st_size
+    # Check if the file size has changed
+
+    #key = is_key_pressed()
+    #if key == 'q':
+    #    print("Escape key was pressed.")
+    #    CloseGracefully()
+    if alogsize > AuthPos:
+        # Move the file pointer to the previous position
+        AuthFileHandle.seek(AuthPos)
+        # Read the new lines added to the file
+        new_data = AuthFileHandle.read()
+        
+        # Process the new lines
+        lines = new_data.split('\n')
+        for line in lines:
+            NewBlocks = ScanAndCompare(line, 'auth.log')
+            if NewBlocks: BlockStatus = True
+        # Update the initial size to the current size
+        AuthPos = alogsize
+    elif alogsize < AuthPos: #log was rotated
+        AuthPos = 0
+    return BlockStatus
+
+
+#######################
+def CheckVNCLog():
+    #checks if vncserver-x11.log updated, if so read in and check for new login failures
+    global vncFileName
+    global vncFileHandle
+    global VNCPos
+    global vncExists
+    NewBlocks = False
+    BlockStatus = False
     VNCPos = 0
+
+    vnclogsize = os.stat(vncFileName).st_size
+    if vnclogsize > VNCPos:
+        # Move the file pointer to the previous position
+        vncFileHandle.seek(VNCPos)
+        # Read the new lines added to the file
+        new_data = vncFileHandle.read()
+        
+        # Process the new lines
+        lines = new_data.split('\n')
+        for line in lines:
+            NewBlocks = ScanAndCompare(line, 'vncserver-x11.log')
+            if NewBlocks: BlockStatus = True
+                
+        # Update the initial size to the current size
+        VNCPos = vnclogsize
+    elif vnclogsize < VNCPos: #log was rotated
+        VNCPos = 0
+    return BlockStatus
+
+
+#######################
+def OpenLogFilesAsStream():
+    LogData('opening logfiles as stream')
+
+    global authExists
+    global vncExists
+
     iFlush = 0 #flush log data every 10 seconds (approx)
     runwhich = 4 #every 4th time, check for new blocks
     runnow = 0 #current run count
+    authBlocks = False
+    vncBlocks = False
+    BlockStatus = False #if new blocks added, set to True, so it can save the blocklist file
 
-    if authExists:
-        try:
-            LogData('opening '+AuthFileName)
-            AuthFileHandle = open(AuthFileName, 'r')
-            authExists = True
-        except Exception as e:
-            authExists = False
-            print('Exception: ', e)
-            LogData(AuthFileName+' error while loading')
 
-    if vncExists:
-        try:
-            LogData('opening '+vncFileName)
-            vncFileHandle = open(vncFileName, 'r')
-            vncExists = True
-        except Exception as e:
-            vncExists = False
-            print('Exception: ', e)
-            LogData(vncFileName+' error while loading')
-    
     if not (authExists and vncExists): ErrorArg(10) #if neither file exists, exit, why else are we running?
-    
+    if authExists: OpenAuthAsStream()
+    if vncExists: OpenVNCAsStream()
+   
     #
     # aahh.. problem. if one of the files doesn't exist, what then...?
     #
     #with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
     while True:
         iFlush += 1
-        if iFlush > 10: #flush log every 10 seconds, not immediately as slows things down
+        if iFlush > 80: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
             iFlush = 0
             FlushLogFile()
             if BlockStatus: 
@@ -598,54 +660,17 @@ def OpenLogFilesAsStream():
                     print('OLAS-New blocks added to blocklist file')
                 SaveBlockList()
                 BlockStatus = False
-        CheckRestartTime()
+        CheckRestartTime() #if current time is equal to restart_time, exist the script (bash will restart it)
         runnow += 1
         if runnow >= runwhich:
             runnow = 0
-            if authExists:
-                alogsize = os.stat(AuthFileName).st_size
-                # Check if the file size has changed
-
-                #key = is_key_pressed()
-                #if key == 'q':
-                #    print("Escape key was pressed.")
-                #    CloseGracefully()
-                if alogsize > AuthPos:
-                    # Move the file pointer to the previous position
-                    AuthFileHandle.seek(AuthPos)
-                    # Read the new lines added to the file
-                    new_data = AuthFileHandle.read()
-                    
-                    # Process the new lines
-                    lines = new_data.split('\n')
-                    for line in lines:
-                        NewBlocks = ScanAndCompare(line, 'auth.log')
-                        if NewBlocks: BlockStatus = True
-                    # Update the initial size to the current size
-                    AuthPos = alogsize
-                elif alogsize < AuthPos: #log was rotated
-                    AuthPos = 0
-            if vncExists:        
-                vnclogsize = os.stat(vncFileName).st_size
-                if vnclogsize > VNCPos:
-                    # Move the file pointer to the previous position
-                    vncFileHandle.seek(VNCPos)
-                    # Read the new lines added to the file
-                    new_data = vncFileHandle.read()
-                    
-                    # Process the new lines
-                    lines = new_data.split('\n')
-                    for line in lines:
-                        NewBlocks = ScanAndCompare(line, 'vncserver-x11.log')
-                        if NewBlocks: BlockStatus = True
-                            
-                    # Update the initial size to the current size
-                    VNCPos = vnclogsize
-                elif vnclogsize < VNCPos: #log was rotated
-                    VNCPos = 0
+            if authExists: authBlocks = CheckAuthLog()
+            if vncExists: vncBlocks = CheckVNCLog()
+            if authBlocks or vncBlocks: BlockStatus = True
 
         time.sleep(0.25)
     #<--while True:
+
 
 #######################
 def SaveSettings():
@@ -832,8 +857,8 @@ def main():
     global slash
     slash = '/'
     Logging = True
-    signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
-    signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
+    signal.signal(signal.SIGINT, CloseGracefully, exitcode = 0) #ctrl-c detection
+    signal.signal(signal.SIGTERM, CloseGracefully, exitcode = 0) #shutdown detection
     
     if not CheckIsLinux():
         print("not linux, so going into debug mode")
