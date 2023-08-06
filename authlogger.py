@@ -67,6 +67,9 @@
 # 2023-07-16 FIXED: blocklist update delay was not working, now fixed.
 # 2023-07-28 ADDED: sigterm handler to close gracefully on shutdown, I hope.
 # 2023-07-30 ADDED: when adding a datetime to existing IP, show which array index it is.
+# 2023-08-06 ADDED: restart time, so it can be restarted at a specific time of day. (in conjunction with bash script looping it)
+#                   This is because I noticed some weirdness with the log file, seems after some days it just stopped blocking.
+#                   Restarting it every day should fix that until I know why.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -128,7 +131,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-07-30r1" #really need to update this every time I change something
+version = "2023-08-06r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -192,6 +195,8 @@ def ErrorArg(err):
             print("neither auth.log nor vnc log file found/loaded.")
         case 11:
             print("for some reason, end of main() was reached. This should not have happened :(")
+        case 12:
+            print("Exiting because restart time is met.")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -274,6 +279,22 @@ def CloseGracefully(signal=None, frame=None):
     if not debugmode: SaveIPTables()
     ErrorArg(0)
 
+def CloseDisgrafully():
+    #any other reason to close, save iptables and exit
+    LogData('closing...')
+    global aBlocklist
+    global AuthFileHandle
+    global vncExists
+    global authExists
+    #AuthFileHandle.close() #not requred, as with statement closes it automatically
+    LogData('closing streams')
+    if vncExists: vncFileHandle.close()
+    if authExists: AuthFileHandle.close()
+    SaveBlockList()
+    SaveSettings()
+    CloseLogFile()
+    if not debugmode: SaveIPTables()
+    #doesn't exit, that should be called from the calling function
 
 #######################
 def BlockIP(ip):
@@ -503,6 +524,23 @@ def SaveBlockList():
     #fblockfile.close() not required with 'with'
 
 
+#######################
+def CheckRestartTime():
+    #if current time is equal o restart_time, exist the script (bash will restart it)
+    global restart_time
+    global debugmode
+    
+    now = datetime.datetime.now()
+    ntime = str(now.hour)+':'+str(now.minute)+':'+str(now.second)
+    if ntime == restart_time:
+        LogData('restarting at '+ntime)
+        if not debugmode:
+            CloseDisgrafully()
+            ErrorArg(12)
+        else:
+            print('RESTART/debug mode: restarting at '+ntime)
+              
+
 ################################################################################################
 # This is the main function loop, it reads the log file and calls ScanAndCompare for each line #
 ################################################################################################
@@ -521,6 +559,8 @@ def OpenLogFilesAsStream():
     AuthPos = 0
     VNCPos = 0
     iFlush = 0 #flush log data every 10 seconds (approx)
+    runwhich = 4 #every 4th time, check for new blocks
+    runnow = 0 #current run count
 
     if authExists:
         try:
@@ -558,50 +598,53 @@ def OpenLogFilesAsStream():
                     print('OLAS-New blocks added to blocklist file')
                 SaveBlockList()
                 BlockStatus = False
+        CheckRestartTime()
+        runnow += 1
+        if runnow >= runwhich:
+            runnow = 0
+            if authExists:
+                alogsize = os.stat(AuthFileName).st_size
+                # Check if the file size has changed
 
-        if authExists:
-            alogsize = os.stat(AuthFileName).st_size
-            # Check if the file size has changed
+                #key = is_key_pressed()
+                #if key == 'q':
+                #    print("Escape key was pressed.")
+                #    CloseGracefully()
+                if alogsize > AuthPos:
+                    # Move the file pointer to the previous position
+                    AuthFileHandle.seek(AuthPos)
+                    # Read the new lines added to the file
+                    new_data = AuthFileHandle.read()
+                    
+                    # Process the new lines
+                    lines = new_data.split('\n')
+                    for line in lines:
+                        NewBlocks = ScanAndCompare(line, 'auth.log')
+                        if NewBlocks: BlockStatus = True
+                    # Update the initial size to the current size
+                    AuthPos = alogsize
+                elif alogsize < AuthPos: #log was rotated
+                    AuthPos = 0
+            if vncExists:        
+                vnclogsize = os.stat(vncFileName).st_size
+                if vnclogsize > VNCPos:
+                    # Move the file pointer to the previous position
+                    vncFileHandle.seek(VNCPos)
+                    # Read the new lines added to the file
+                    new_data = vncFileHandle.read()
+                    
+                    # Process the new lines
+                    lines = new_data.split('\n')
+                    for line in lines:
+                        NewBlocks = ScanAndCompare(line, 'vncserver-x11.log')
+                        if NewBlocks: BlockStatus = True
+                            
+                    # Update the initial size to the current size
+                    VNCPos = vnclogsize
+                elif vnclogsize < VNCPos: #log was rotated
+                    VNCPos = 0
 
-            #key = is_key_pressed()
-            #if key == 'q':
-            #    print("Escape key was pressed.")
-            #    CloseGracefully()
-            if alogsize > AuthPos:
-                # Move the file pointer to the previous position
-                AuthFileHandle.seek(AuthPos)
-                # Read the new lines added to the file
-                new_data = AuthFileHandle.read()
-                
-                # Process the new lines
-                lines = new_data.split('\n')
-                for line in lines:
-                    NewBlocks = ScanAndCompare(line, 'auth.log')
-                    if NewBlocks: BlockStatus = True
-                # Update the initial size to the current size
-                AuthPos = alogsize
-            elif alogsize < AuthPos: #log was rotated
-                AuthPos = 0
-        if vncExists:        
-            vnclogsize = os.stat(vncFileName).st_size
-            if vnclogsize > VNCPos:
-                # Move the file pointer to the previous position
-                vncFileHandle.seek(VNCPos)
-                # Read the new lines added to the file
-                new_data = vncFileHandle.read()
-                
-                # Process the new lines
-                lines = new_data.split('\n')
-                for line in lines:
-                    NewBlocks = ScanAndCompare(line, 'vncserver-x11.log')
-                    if NewBlocks: BlockStatus = True
-                        
-                # Update the initial size to the current size
-                VNCPos = vnclogsize
-            elif vnclogsize < VNCPos: #log was rotated
-                VNCPos = 0
-
-        time.sleep(1)
+        time.sleep(0.25)
     #<--while True:
 
 #######################
@@ -612,7 +655,7 @@ def SaveSettings():
     global AuthFileName
     global failcount
     global iniFileName
-    
+    global restart_time
     LogData('saving settings')
     # Create a new configparser object
     config = configparser.ConfigParser()
@@ -622,7 +665,8 @@ def SaveSettings():
         'blockfile': BlockFileName,
         'authfile': AuthFileName,
         'failcount': failcount,
-        'vncfile': vncFileName
+        'vncfile': vncFileName,
+        'restart_time': restart_time
     }
     # Save the settings to an INI file
     try:
@@ -667,6 +711,7 @@ def LoadSettings():
     global iniFileName
     global authExists
     global vncExists
+    global restart_time
 
     LogData('loading settings')
     rt = False
@@ -679,6 +724,7 @@ def LoadSettings():
             BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
             AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
             fc = config.get('Settings','failcount', fallback= '2')
+            restart_time = config.get('Settings','restart_time', fallback= '00:10:10')
             try:
                 failcount = int(fc)
             except ValueError:
@@ -698,6 +744,7 @@ def LoadSettings():
         AuthFileName = '/var/log/auth.log'
         failcount = 2
         vncFileName = '/var/log/vncserver-x11.txt'
+        restart_time = '00:10:10'
         rt = True
 
     authExists = True if (os.path.isfile(AuthFileName)) else False
