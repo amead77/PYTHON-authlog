@@ -4,8 +4,9 @@
 while :
 do
     echo "Starting authlogger.py"
-    tmux -c "sudo python authlogger.py"
+    #tmux -c "sudo python authlogger.py"
     #if not exit on code 12, then exit, else restart
+    sudo python authlogger.py
     if [ $? -ne 12 ]; then
         echo "authlogger.py exited with code $?, exiting..."
         exit
