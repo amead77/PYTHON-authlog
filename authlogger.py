@@ -246,8 +246,8 @@ def CloseGracefully(signal=None, frame=None, exitcode=0):
     global authExists
     #AuthFileHandle.close() #not requred, as with statement closes it automatically
     LogData('closing streams')
-    if vncExists: vncFileHandle.close()
-    if authExists: AuthFileHandle.close()
+    if vncExists and (exitcode != 10): vncFileHandle.close()
+    if authExists and (exitcode != 10): AuthFileHandle.close()
     SaveBlockList()
     SaveSettings()
     CloseLogFile()
@@ -493,11 +493,11 @@ def CheckRestartTime():
     ntime = str(now.hour)+':'+str(now.minute)+':'+str(now.second)
     if ntime == restart_time:
         LogData('restarting at '+ntime)
-        if not debugmode:
-            CloseGracefully(exitcode=12)
-        else:
-            print('RESTART/debug mode: restarting at '+ntime)
-              
+        #if not debugmode:
+        #    CloseGracefully(exitcode=12)
+        #else:
+        #    print('RESTART/debug mode: restarting at '+ntime)
+        CloseGracefully(exitcode=12) if not debugmode else print('RESTART/debug mode: restarting at '+ntime)
 
 #######################
 def OpenAuthAsStream():
@@ -716,10 +716,26 @@ def LoadSettings():
     global authExists
     global vncExists
     global restart_time
+    global debugmode
 
     LogData('loading settings')
     rt = False
-    if os.path.isfile(iniFileName):
+
+    #set some defaults, ini will override
+    localip = '192.168.'
+    failcount = 2
+    restart_time = '00:10:10'
+    rt = True
+    if not debugmode:
+        BlockFileName = StartDir+slash+'blocklist.dat'
+        AuthFileName = '/var/log/auth.log'
+        vncFileName = '/var/log/vncserver-x11.log'
+    else:
+        BlockFileName = StartDir+slash+'blocklist.dat'
+        AuthFileName = StartDir+slash+'auth.log'
+        vncFileName = StartDir+slash+'vncserver-x11.log'
+
+    if os.path.isfile(iniFileName) and not debugmode:
         config = configparser.ConfigParser()
         try:
             config.read(iniFileName)
@@ -733,7 +749,7 @@ def LoadSettings():
                 failcount = int(fc)
             except ValueError:
                 failcount = 2
-            vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.txt')
+            vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
             # show me the settings
             LogData("loaded settings.ini:")
 
@@ -741,15 +757,15 @@ def LoadSettings():
         except:
             LogData('error loading settings.ini')
             rt = False
-    else:
-        LogData('settings.ini not found, using defaults:')
-        localip = '192.168.'
-        BlockFileName = StartDir+slash+'blocklist.dat'
-        AuthFileName = '/var/log/auth.log'
-        failcount = 2
-        vncFileName = '/var/log/vncserver-x11.txt'
-        restart_time = '00:10:10'
-        rt = True
+    #else:
+    #    LogData('settings.ini not found, using defaults:')
+    #    localip = '192.168.'
+    #    BlockFileName = StartDir+slash+'blocklist.dat'
+    #    AuthFileName = '/var/log/auth.log'
+    #    failcount = 2
+    #    vncFileName = '/var/log/vncserver-x11.txt'
+    #    restart_time = '00:10:10'
+    #    rt = True
 
     authExists = True if (os.path.isfile(AuthFileName)) else False
     vncExists = True if (os.path.isfile(vncFileName)) else False
@@ -824,6 +840,11 @@ def FlushLogFile():
     logFileHandle.flush()
 
 
+#######################
+def orr(a, b):
+    return bool(a) or bool(b)
+
+
 ########################################################
 ####################### [ MAIN ] #######################
 ########################################################
@@ -834,6 +855,18 @@ def main():
     global StartDir
     global debugmode
     global slash
+    global authExists
+    global vncExists
+
+    iFlush = 0 #flush log data every 10 seconds (approx)
+    runwhich = 4 #every 4th (0.25*4=1 sec) time, check for new blocks
+    runnow = 0 #current run count
+    authBlocks = False
+    vncBlocks = False
+    BlockStatus = False #if new blocks added, set to True, so it can save the blocklist file
+
+
+
     slash = '/'
     Logging = True
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
@@ -848,16 +881,54 @@ def main():
     OpenLogFile()
     Welcome()
     GetArgs()
+
+    print("A+") if (os.path.isfile(AuthFileName)) else print("A-")
+    print("V+") if (os.path.isfile(vncFileName)) else print("V-")
+
+
     time.sleep(3)
     ClearIPTables()
     OpenBlockList()
     PrintBlockList()
-    OpenLogFilesAsStream()
+    #OpenLogFilesAsStream()
+
+    LogData('opening logfiles as stream')
+
+    if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
+    if authExists: OpenAuthAsStream()
+    if vncExists: OpenVNCAsStream()
+   
+    #
+    # aahh.. problem. if one of the files doesn't exist, what then...?
+    #
+    #with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
+    while True:
+        iFlush += 1
+        if iFlush > 80: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
+            iFlush = 0
+            FlushLogFile()
+            if BlockStatus: 
+                if debugmode:
+                    print('OLAS-New blocks added to blocklist file')
+                SaveBlockList()
+                BlockStatus = False
+        CheckRestartTime() #if current time is equal to restart_time, exist the script (bash will restart it)
+        runnow += 1
+        if runnow >= runwhich:
+            runnow = 0
+            if authExists: authBlocks = CheckAuthLog()
+            if vncExists: vncBlocks = CheckVNCLog()
+            if authBlocks or vncBlocks: BlockStatus = True
+            if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
+
+        time.sleep(0.25)
+    #<--while True:
+
 
     #should never reach here due to ctrl-c detection
     CloseGracefully()
-    ErrorArg(11)
-    sys.exit(255)
+    ErrorArg(11) #certainly not 'ere
+    sys.exit(255) #just in case...
 
 if __name__ == '__main__':
     main()   
