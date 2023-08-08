@@ -71,6 +71,8 @@
 #                   This is because I noticed some weirdness with the log file, seems after some days it just stopped blocking.
 #                   Restarting it every day should fix that until I know why.
 # 2023-08-06 CHANGED: split OpenLogFilesAsStream() into 4 funcs, OpenAuthAsStream(), OpenVNCAsStream(), CheckAuthLog(), CheckVNCLog()
+# 2023-08-08 FIXED: I hope... CheckAuthLog() and CheckVNCLog() were checking if log was cycled, but not closing/reopening the stream, just resetting the position.
+#                   Now closes/reopens the stream if log is cycled. I'll change the reset time to a nil value to test for a few days.
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -100,7 +102,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-06r2" #really need to update this every time I change something
+version = "2023-08-08r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -565,6 +567,8 @@ def CheckAuthLog():
         AuthPos = alogsize
     elif alogsize < AuthPos: #log was rotated
         AuthPos = 0
+        AuthFileHandle.close()
+        OpenAuthAsStream()
     return BlockStatus
 
 
@@ -596,6 +600,8 @@ def CheckVNCLog():
         VNCPos = vnclogsize
     elif vnclogsize < VNCPos: #log was rotated
         VNCPos = 0
+        vncFileHandle.close()
+        OpenVNCAsStream()
     return BlockStatus
 
 
@@ -614,7 +620,7 @@ def OpenLogFilesAsStream():
     BlockStatus = False #if new blocks added, set to True, so it can save the blocklist file
 
 
-    if not (authExists and vncExists): ErrorArg(10) #if neither file exists, exit, why else are we running?
+    if not (authExists and vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
     if authExists: OpenAuthAsStream()
     if vncExists: OpenVNCAsStream()
    
@@ -639,6 +645,7 @@ def OpenLogFilesAsStream():
             if authExists: authBlocks = CheckAuthLog()
             if vncExists: vncBlocks = CheckVNCLog()
             if authBlocks or vncBlocks: BlockStatus = True
+            if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
 
         time.sleep(0.25)
     #<--while True:
