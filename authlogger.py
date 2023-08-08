@@ -606,52 +606,6 @@ def CheckVNCLog():
 
 
 #######################
-def OpenLogFilesAsStream():
-    LogData('opening logfiles as stream')
-
-    global authExists
-    global vncExists
-
-    iFlush = 0 #flush log data every 10 seconds (approx)
-    runwhich = 4 #every 4th (0.25*4=1 sec) time, check for new blocks
-    runnow = 0 #current run count
-    authBlocks = False
-    vncBlocks = False
-    BlockStatus = False #if new blocks added, set to True, so it can save the blocklist file
-
-
-    if not (authExists and vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
-    if authExists: OpenAuthAsStream()
-    if vncExists: OpenVNCAsStream()
-   
-    #
-    # aahh.. problem. if one of the files doesn't exist, what then...?
-    #
-    #with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
-    while True:
-        iFlush += 1
-        if iFlush > 80: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
-            iFlush = 0
-            FlushLogFile()
-            if BlockStatus: 
-                if debugmode:
-                    print('OLAS-New blocks added to blocklist file')
-                SaveBlockList()
-                BlockStatus = False
-        CheckRestartTime() #if current time is equal to restart_time, exist the script (bash will restart it)
-        runnow += 1
-        if runnow >= runwhich:
-            runnow = 0
-            if authExists: authBlocks = CheckAuthLog()
-            if vncExists: vncBlocks = CheckVNCLog()
-            if authBlocks or vncBlocks: BlockStatus = True
-            if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
-
-        time.sleep(0.25)
-    #<--while True:
-
-
-#######################
 def SaveSettings():
     #save last settings to settings.ini
     global localip
