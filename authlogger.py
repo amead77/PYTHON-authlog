@@ -102,7 +102,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-08r0" #really need to update this every time I change something
+version = "2023-08-09r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -566,6 +566,7 @@ def CheckAuthLog():
         # Update the initial size to the current size
         AuthPos = alogsize
     elif alogsize < AuthPos: #log was rotated
+        LogData('auth.log rotated')
         AuthPos = 0
         AuthFileHandle.close()
         OpenAuthAsStream()
@@ -599,6 +600,7 @@ def CheckVNCLog():
         # Update the initial size to the current size
         VNCPos = vnclogsize
     elif vnclogsize < VNCPos: #log was rotated
+        LogData('vncserver-x11.log rotated')
         VNCPos = 0
         vncFileHandle.close()
         OpenVNCAsStream()
