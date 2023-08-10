@@ -110,7 +110,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-10r3" #really need to update this every time I change something
+version = "2023-08-10r4" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -393,7 +393,7 @@ def GetDateTime(authstring, authtype):
 def AmAlive():
     #print out a timestamp to log every hour to show it's still functioning
     nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-    if nowtime[-5:] == ':00:00':
+    if nowtime[-5:] == '00:00':
         LogData('Checking in, nothing to report')
 
 
