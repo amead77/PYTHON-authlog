@@ -103,7 +103,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-10r0" #really need to update this every time I change something
+version = "2023-08-10r1" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -627,6 +627,7 @@ def SaveSettings():
     global iniFileName
     global restart_time
     global aAutoBlockUsers
+    global sAutoBlockUsers
 
     LogData('saving settings')
     # Create a new configparser object
@@ -639,7 +640,7 @@ def SaveSettings():
         'failcount': failcount,
         'vncfile': vncFileName,
         'restart_time': restart_time,
-        'aautoblockusers': aAutoBlockUsers
+        'autoblockusers': sAutoBlockUsers
     }
     # Save the settings to an INI file
     try:
@@ -709,6 +710,7 @@ def LoadSettings():
     global vncExists
     global restart_time
     global debugmode
+    global sAutoBlockUsers
 
     LogData('loading settings')
     rt = False
@@ -742,7 +744,7 @@ def LoadSettings():
             except ValueError:
                 failcount = 2
             vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
-            sAutoBlockUsers = config.get('Settings','aautoblockusers', fallback= '')
+            sAutoBlockUsers = config.get('Settings','autoblockusers', fallback= '')
             SplitAutoBlockUsers(sAutoBlockUsers)
             # show me the settings
             LogData("loaded settings.ini:")
