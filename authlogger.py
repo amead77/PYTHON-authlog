@@ -21,8 +21,8 @@
 # Jun 28 11:22:07 whitebox sshd[805578]: Invalid user wqmarlduiqkmgs from 60.205.111.35 port 57770
 # Jun  7 12:52:40 whitebox sshd[2669317]: Unable to negotiate with 143.198.205.110 port 59296: no matching key exchange method found. Their offer: diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1 [preauth]
 # <13> 2023-07-02T17:50:30.774Z whitebox vncserver-x11[551]: Connections: disconnected: 192.168.1.220::54605 (TCP) ([AuthFailure] Either the username was not recognised, or the password was incorrect)
-####################### [ Requirements ] #######################
 
+####################### [ Requirements ] #######################
 # Initially it only needs a few things.
 # 1. either auth.log file, which is usually in /var/log/auth.log, or vncserver-x11.log, which is usually in /var/log/vncserver-x11.log
 # 2. this file, run as sudo root.
@@ -45,9 +45,12 @@
 #   CHANGE: switch from configparser to toml, maybe, maybe not really needed.
 #   CHANGE: I use so many globals in this, I should probably switch to local variables and pass to funcs.
 #   CHANGE: there's a lot of hard coded text, probably should move to a file so translations are possible.
+#   CHANGE: see FirstRunCheckBlocklist() for TODO: block specific users
 #
+
 ####################### [ Changes ] #######################
 # earlier wasn't noted... in fact I rarely noted changes, I really should.
+# 2020 - 2023: I don't remember what I did, but it was a lot. Which hardly any remains of, and is unhelpful to even bother mentioning...
 # 2023-06-01 beginning to implement failcount, but not done yet
 # 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
 # 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
@@ -74,6 +77,8 @@
 # 2023-08-08 FIXED: I hope... CheckAuthLog() and CheckVNCLog() were checking if log was cycled, but not closing/reopening the stream, just resetting the position.
 #                   Now closes/reopens the stream if log is cycled. I'll change the reset time to a nil value to test for a few days.
 # 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
+# 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini)
+
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -85,6 +90,8 @@
 # I literally write this using camel case, snake case, pascal case, and whatever else I feel like at the time.
 # I will try to adjust it for consistency.
 #
+
+
 
 #########################################################
 ####################### [ Setup ] #######################
@@ -103,7 +110,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-10r1" #really need to update this every time I change something
+version = "2023-08-10r3" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -285,7 +292,17 @@ def FirstRunCheckBlocklist():
     global failcount
     LogData('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
-        if len(aBlocklist[x].aDateTime) >= failcount:
+        
+        ###############################################
+        # TODO: Block specific users
+        # come back to here...
+        # add in auto block user (CheckAutoBlockUsers()) here
+        # but requires a fundamental change to the blocklist.
+        # cBlock object needs to be changed to include the username as a string
+        #
+        ###############################################
+
+        if (len(aBlocklist[x].aDateTime) >= failcount):
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
             BlockIP(aBlocklist[x].ip)
             #print('blocking: "'+aBlocklist[x].ip+'"')
@@ -310,7 +327,7 @@ def IsValidIP(ip):
 
 
 #######################
-def CheckBlocklist(ip, timeblocked, reason):
+def CheckBlocklist(ip, timeblocked, reason, user=''):
     #print('checking: '+ip)
     #check to see if ip is already in blocklist
     global aBlocklist
@@ -333,7 +350,7 @@ def CheckBlocklist(ip, timeblocked, reason):
             LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
-            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(reason)):
+            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
                 BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
@@ -412,6 +429,7 @@ def ScanAndCompare(aline, authtype):
     #global AuthPos
     DateString = ''
     newblock = False
+    username = ''
     #check if aline is in the array of aIgnoreIPs
     
     if not CheckLocalIP(aline):
@@ -422,7 +440,8 @@ def ScanAndCompare(aline, authtype):
                 if aline.find('Failed password for',) >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
-                    
+                    username = tmp[10]
+                
                 if aline.find('Did not receive identification') >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-3]
@@ -430,6 +449,7 @@ def ScanAndCompare(aline, authtype):
                 if aline.find('Invalid user',) >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-3]
+                    username = tmp[7]
 
                 if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
                     newblock = True
@@ -451,7 +471,7 @@ def ScanAndCompare(aline, authtype):
                 #if newblock: CheckBlocklist(checkIP, DateString, '(vncserver-x11.log:'+str(AuthPos) +') '+aline[30:])
         if newblock:
             DateString = GetDateTime(aline, authtype)
-            newblock = CheckBlocklist(checkIP, DateString, PassMe)
+            newblock = CheckBlocklist(checkIP, DateString, PassMe, user=username)
             if debugmode:
                 if newblock: print("SAC-newblock")
     return newblock
@@ -680,7 +700,7 @@ def CheckAutoBlockUsers(aline):
     global aAutoBlockUsers
     ret = False
     for i in range(len(aAutoBlockUsers)):
-        if ' '+aAutoBlockUsers[i]+' ' in aline:
+        if aAutoBlockUsers[i] in aline.strip():
             ret = True
             LogData('autoblock user: '+aAutoBlockUsers[i])
     return ret
@@ -691,7 +711,6 @@ def SplitAutoBlockUsers(userList):
     #split comma separated list of users into an array
     global aAutoBlockUsers
     #aAutoBlockUsers = userList.split(',')
-    #use list comprehension to split and strip the list, spaces added back in later
     LogData('autoblock users: '+str(userList))
     aAutoBlockUsers = [x.strip() for x in userList.split(',')]
     
@@ -728,6 +747,8 @@ def LoadSettings():
         BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = StartDir+slash+'auth.log'
         vncFileName = StartDir+slash+'vncserver-x11.log'
+        sAutoBlockUsers = 'root,pi'
+        SplitAutoBlockUsers(sAutoBlockUsers)
 
     if os.path.isfile(iniFileName) and not debugmode:
         config = configparser.ConfigParser()
@@ -853,7 +874,8 @@ def main():
     global slash
     global authExists
     global vncExists
-
+    global sAutoBlockUsers
+    sAutoBlockUsers = ''
     iFlush = 0 #flush log data every 10 seconds (approx)
     runwhich = 4 #every 4th (0.25*4=1 sec) time, check for new blocks
     runnow = 0 #current run count
@@ -877,9 +899,9 @@ def main():
     OpenLogFile()
     Welcome()
     GetArgs()
-
-    print("A+") if (os.path.isfile(AuthFileName)) else print("A-")
-    print("V+") if (os.path.isfile(vncFileName)) else print("V-")
+    if debugmode:
+        print("A+") if (os.path.isfile(AuthFileName)) else print("A-")
+        print("V+") if (os.path.isfile(vncFileName)) else print("V-")
 
 
     time.sleep(3)
