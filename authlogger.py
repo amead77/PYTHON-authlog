@@ -73,6 +73,7 @@
 # 2023-08-06 CHANGED: split OpenLogFilesAsStream() into 4 funcs, OpenAuthAsStream(), OpenVNCAsStream(), CheckAuthLog(), CheckVNCLog()
 # 2023-08-08 FIXED: I hope... CheckAuthLog() and CheckVNCLog() were checking if log was cycled, but not closing/reopening the stream, just resetting the position.
 #                   Now closes/reopens the stream if log is cycled. I'll change the reset time to a nil value to test for a few days.
+# 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
@@ -102,7 +103,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-09r0" #really need to update this every time I change something
+version = "2023-08-10r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -119,6 +120,7 @@ class cBlock:
 aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
 aIgnoreIPs = [] #array of ip addresses to ignore
+aAutoBlockUsers = [] #array of users to auto block, such as root, pi, etc
 
 #############################################################
 ####################### [ Functions ] #######################
@@ -327,11 +329,11 @@ def CheckBlocklist(ip, timeblocked, reason):
                     break
 
     if not foundit:
-        if dtfound >= 0:
+        if (dtfound >= 0) or (CheckAutoBlockUsers(reason)):
             LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
-            if len(aBlocklist[dtfound].aDateTime) >= failcount:
+            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(reason)):
                 BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
@@ -368,6 +370,14 @@ def GetDateTime(authstring, authtype):
                 timey = "20000101000000"
 
     return timey
+
+
+#######################
+def AmAlive():
+    #print out a timestamp to log every hour to show it's still functioning
+    nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+    if nowtime[-5:] == ':00:00':
+        LogData('Checking in, nothing to report')
 
 
 #######################
@@ -616,6 +626,8 @@ def SaveSettings():
     global failcount
     global iniFileName
     global restart_time
+    global aAutoBlockUsers
+
     LogData('saving settings')
     # Create a new configparser object
     config = configparser.ConfigParser()
@@ -626,7 +638,8 @@ def SaveSettings():
         'authfile': AuthFileName,
         'failcount': failcount,
         'vncfile': vncFileName,
-        'restart_time': restart_time
+        'restart_time': restart_time,
+        'aautoblockusers': aAutoBlockUsers
     }
     # Save the settings to an INI file
     try:
@@ -658,6 +671,29 @@ def SplitLocalIP(ipList):
     aIgnoreIPs = [x.strip() for x in ipList.split(',')]
     
     LogData('local IP list: '+str(aIgnoreIPs))
+
+
+#######################
+def CheckAutoBlockUsers(aline):
+    #check if user is in the auto block list
+    global aAutoBlockUsers
+    ret = False
+    for i in range(len(aAutoBlockUsers)):
+        if ' '+aAutoBlockUsers[i]+' ' in aline:
+            ret = True
+            LogData('autoblock user: '+aAutoBlockUsers[i])
+    return ret
+
+
+#######################
+def SplitAutoBlockUsers(userList):
+    #split comma separated list of users into an array
+    global aAutoBlockUsers
+    #aAutoBlockUsers = userList.split(',')
+    #use list comprehension to split and strip the list, spaces added back in later
+    LogData('autoblock users: '+str(userList))
+    aAutoBlockUsers = [x.strip() for x in userList.split(',')]
+    
 
 
 #######################
@@ -706,6 +742,8 @@ def LoadSettings():
             except ValueError:
                 failcount = 2
             vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
+            sAutoBlockUsers = config.get('Settings','aautoblockusers', fallback= '')
+            SplitAutoBlockUsers(sAutoBlockUsers)
             # show me the settings
             LogData("loaded settings.ini:")
 
@@ -872,6 +910,7 @@ def main():
         runnow += 1
         if runnow >= runwhich:
             runnow = 0
+            AmAlive()
             if authExists: authBlocks = CheckAuthLog()
             if vncExists: vncBlocks = CheckVNCLog()
             if authBlocks or vncBlocks: BlockStatus = True
