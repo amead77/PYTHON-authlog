@@ -77,7 +77,7 @@
 # 2023-08-08 FIXED: I hope... CheckAuthLog() and CheckVNCLog() were checking if log was cycled, but not closing/reopening the stream, just resetting the position.
 #                   Now closes/reopens the stream if log is cycled. I'll change the reset time to a nil value to test for a few days.
 # 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
-# 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini)
+# 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -346,11 +346,11 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
                     break
 
     if not foundit:
-        if (dtfound >= 0) or (CheckAutoBlockUsers(reason)):
+        if (dtfound >= 0): # or (CheckAutoBlockUsers(reason)):
             LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
-            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
+            if (len(aBlocklist[dtfound].aDateTime) >= failcount): # or (CheckAutoBlockUsers(user)):
                 BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
