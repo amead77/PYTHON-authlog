@@ -111,7 +111,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-19r0" #really need to update this every time I change something
+version = "2023-08-19r1" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -347,18 +347,18 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
                     break
 
     if not foundit:
-        if (dtfound >= 0): # or (CheckAutoBlockUsers(reason)):
+        if (dtfound >= 0):
             LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
-            if (len(aBlocklist[dtfound].aDateTime) >= failcount): # or (CheckAutoBlockUsers(user)):
+            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
                 BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
-            if failcount == 1: #if failcount is 1, block on first failure
+            if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
                 BlockIP(ip)
     foundit = True if not foundit else False
     if debugmode:
@@ -738,14 +738,19 @@ def SplitLocalIP(ipList):
 
 
 #######################
-def CheckAutoBlockUsers(aline):
+def CheckAutoBlockUsers(username):
     #check if user is in the auto block list
     global aAutoBlockUsers
     ret = False
+    username = username.strip()
+    username = username.upper()
+    if username == '':
+        return ret
     for i in range(len(aAutoBlockUsers)):
-        if aAutoBlockUsers[i] in aline.strip():
+        if aAutoBlockUsers[i] == username:
             ret = True
-            LogData('autoblock user: '+aAutoBlockUsers[i])
+            LogData('Autoblock bad user: '+aAutoBlockUsers[i])
+            return ret
     return ret
 
 
@@ -754,6 +759,7 @@ def SplitAutoBlockUsers(userList):
     #split comma separated list of users into an array
     global aAutoBlockUsers
     #aAutoBlockUsers = userList.split(',')
+    userList = userList.upper()
     LogData('autoblock users: '+str(userList))
     aAutoBlockUsers = [x.strip() for x in userList.split(',')]
     
@@ -790,8 +796,8 @@ def LoadSettings():
         BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = StartDir+slash+'auth.log'
         vncFileName = StartDir+slash+'vncserver-x11.log'
-        sAutoBlockUsers = 'root,pi'
-        SplitAutoBlockUsers(sAutoBlockUsers)
+        #sAutoBlockUsers = 'root,pi'
+        #SplitAutoBlockUsers(sAutoBlockUsers)
 
     if os.path.isfile(iniFileName) and not debugmode:
         config = configparser.ConfigParser()
@@ -806,10 +812,10 @@ def LoadSettings():
             try:
                 failcount = int(fc)
             except ValueError:
+                LogData('error: failcount is not an integer, using default of 2: '+fc)
                 failcount = 2
             vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
             sAutoBlockUsers = config.get('Settings','autoblockusers', fallback= '')
-            SplitAutoBlockUsers(sAutoBlockUsers)
             # show me the settings
             LogData("loaded settings.ini:")
 
@@ -817,6 +823,7 @@ def LoadSettings():
         except:
             LogData('error loading settings.ini')
             rt = False
+        SplitAutoBlockUsers(sAutoBlockUsers)
     #else:
     #    LogData('settings.ini not found, using defaults:')
     #    localip = '192.168.'
@@ -925,7 +932,7 @@ def is_log_rotated( original_inode, file_path ):
         return False
     
     if original_inode != current_inode:
-        LogData("Log file has been rotated (inode change): "+str(original_inode)+":"+str(current_inode))
+        LogData("Log file rotated (inode change: "+file_path+"): "+str(original_inode)+":"+str(current_inode))
         return True
     
     #if original_mtime != current_mtime:
