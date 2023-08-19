@@ -78,6 +78,7 @@
 #                   Now closes/reopens the stream if log is cycled. I'll change the reset time to a nil value to test for a few days.
 # 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
 # 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
+# 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -110,7 +111,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-10r4" #really need to update this every time I change something
+version = "2023-08-19r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -392,8 +393,12 @@ def GetDateTime(authstring, authtype):
 #######################
 def AmAlive():
     #print out a timestamp to log every hour to show it's still functioning
+    global LastCheckIn
+
     nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-    if nowtime[-5:] == '00:00':
+    #print just the hour from nowtime variable
+    if (nowtime[-5:-3] == '00') and (nowtime[-8:-6] != LastCheckIn):
+        LastCheckIn = nowtime[-8:-6]
         LogData('Checking in, nothing to report')
 
 
@@ -537,6 +542,7 @@ def OpenAuthAsStream():
     global AuthFileHandle
     global authExists
 
+    AuthPos = 0
     try:
         LogData('opening '+AuthFileName)
         AuthFileHandle = open(AuthFileName, 'r')
@@ -555,6 +561,7 @@ def OpenVNCAsStream():
     global vncFileHandle
     global vncExists
 
+    VNCPos = 0
     try:
         LogData('opening '+vncFileName)
         vncFileHandle = open(vncFileName, 'r')
@@ -566,6 +573,40 @@ def OpenVNCAsStream():
 
 
 #######################
+def CloseAuthStream():
+    #closes the auth.log file stream
+    global AuthFileName
+    global AuthPos
+    global AuthFileHandle
+    global authExists
+
+    try:
+        LogData('closing '+AuthFileName)
+        AuthFileHandle.close()
+        authExists = False
+    except Exception as e:
+        print('Exception: ', e)
+        LogData(AuthFileName+' error while closing')
+
+
+#######################
+def CloseVNCStream():
+    #closes the vncserver-x11.log file stream
+    global vncFileName
+    global VNCPos
+    global vncFileHandle
+    global vncExists
+
+    try:
+        LogData('closing '+vncFileName)
+        vncFileHandle.close()
+        vncExists = False
+    except Exception as e:
+        print('Exception: ', e)
+        LogData(vncFileName+' error while closing')
+
+
+#######################
 def CheckAuthLog():
     #checks if auth.log updated, if so read in and check for new login failures
     global AuthFileName
@@ -573,7 +614,7 @@ def CheckAuthLog():
     global AuthFileHandle
     NewBlocks = False
     BlockStatus = False
-    AuthPos = 0
+    #AuthPos = 0
 
     alogsize = os.stat(AuthFileName).st_size
     # Check if the file size has changed
@@ -595,11 +636,13 @@ def CheckAuthLog():
             if NewBlocks: BlockStatus = True
         # Update the initial size to the current size
         AuthPos = alogsize
-    elif alogsize < AuthPos: #log was rotated
-        LogData('auth.log rotated')
-        AuthPos = 0
-        AuthFileHandle.close()
-        OpenAuthAsStream()
+    
+    # don't do this anymore, superceded by checking inode
+    #elif alogsize < AuthPos: #log was rotated
+    #    LogData('auth.log rotated')
+    #    AuthPos = 0
+    #    AuthFileHandle.close()
+    #    OpenAuthAsStream()
     return BlockStatus
 
 
@@ -612,7 +655,7 @@ def CheckVNCLog():
     global vncExists
     NewBlocks = False
     BlockStatus = False
-    VNCPos = 0
+    #VNCPos = 0
 
     vnclogsize = os.stat(vncFileName).st_size
     if vnclogsize > VNCPos:
@@ -629,11 +672,11 @@ def CheckVNCLog():
                 
         # Update the initial size to the current size
         VNCPos = vnclogsize
-    elif vnclogsize < VNCPos: #log was rotated
-        LogData('vncserver-x11.log rotated')
-        VNCPos = 0
-        vncFileHandle.close()
-        OpenVNCAsStream()
+    #elif vnclogsize < VNCPos: #log was rotated
+    #    LogData('vncserver-x11.log rotated')
+    #    VNCPos = 0
+    #    vncFileHandle.close()
+    #    OpenVNCAsStream()
     return BlockStatus
 
 
@@ -862,6 +905,36 @@ def orr(a, b):
     return bool(a) or bool(b)
 
 
+#######################
+def get_file_inode(file_path):
+    #get inode and modification time of file
+    try:
+        stat_info = os.stat(file_path)
+        return stat_info.st_ino
+    except FileNotFoundError:
+        return None, None
+
+
+#######################
+def is_log_rotated( original_inode, file_path ):
+    #check if log file has been rotated
+    current_inode = get_file_inode(file_path)
+    
+    if current_inode is None:
+        LogData("File not found while checking inode: "+file_path)
+        return False
+    
+    if original_inode != current_inode:
+        LogData("Log file has been rotated (inode change): "+str(original_inode)+":"+str(current_inode))
+        return True
+    
+    #if original_mtime != current_mtime:
+    #    print("Log file has been rotated (modification time change).")
+    #    return True
+    
+    return False
+
+
 ########################################################
 ####################### [ MAIN ] #######################
 ########################################################
@@ -875,6 +948,16 @@ def main():
     global authExists
     global vncExists
     global sAutoBlockUsers
+    global LastCheckIn
+    global AuthFileName
+    global vncFileName
+    global VNCPos
+    global AuthPos
+
+    AuthPos = 0
+    VNCPos = 0
+    LastCheckIn = ""
+
     sAutoBlockUsers = ''
     iFlush = 0 #flush log data every 10 seconds (approx)
     runwhich = 4 #every 4th (0.25*4=1 sec) time, check for new blocks
@@ -882,7 +965,8 @@ def main():
     authBlocks = False
     vncBlocks = False
     BlockStatus = False #if new blocks added, set to True, so it can save the blocklist file
-
+    AuthLogInode = None
+    VNCLogInode = None
 
 
     slash = '/'
@@ -913,8 +997,12 @@ def main():
     LogData('opening logfiles as stream')
 
     if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
-    if authExists: OpenAuthAsStream()
-    if vncExists: OpenVNCAsStream()
+    if authExists: 
+        AuthLogInode = get_file_inode(AuthFileName)
+        OpenAuthAsStream()
+    if vncExists: 
+        VNCLogInode = get_file_inode(vncFileName)
+        OpenVNCAsStream()
    
     #
     # aahh.. problem. if one of the files doesn't exist, what then...?
@@ -930,11 +1018,22 @@ def main():
                     print('OLAS-New blocks added to blocklist file')
                 SaveBlockList()
                 BlockStatus = False
-        CheckRestartTime() #if current time is equal to restart_time, exist the script (bash will restart it)
+        CheckRestartTime() #if current time is equal to restart_time, exit the script (bash will restart it)
         runnow += 1
         if runnow >= runwhich:
             runnow = 0
             AmAlive()
+            
+            if is_log_rotated(AuthLogInode, AuthFileName):
+                CloseAuthStream()
+                OpenAuthAsStream()
+                AuthLogInode = get_file_inode(AuthFileName)
+            
+            if is_log_rotated(VNCLogInode, vncFileName):
+                CloseVNCStream()
+                OpenVNCAsStream()
+                VNCLogInode = get_file_inode(vncFileName)
+
             if authExists: authBlocks = CheckAuthLog()
             if vncExists: vncBlocks = CheckVNCLog()
             if authBlocks or vncBlocks: BlockStatus = True
