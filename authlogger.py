@@ -540,8 +540,9 @@ def CheckRestartTime():
     global restart_time
     global debugmode
     
-    now = datetime.datetime.now()
-    ntime = str(now.hour)+':'+str(now.minute)+':'+str(now.second)
+    #now = datetime.datetime.now()
+    ntime = time.strftime('%H:%M:%S', time.localtime(time.time()))
+    #ntime = str(now.hour)+':'+str(now.minute)+':'+str(now.second)
     if ntime == restart_time:
         LogData('restarting at '+ntime)
         #if not debugmode:
@@ -867,6 +868,7 @@ def LoadSettings():
     if authExists: LogData(f"authfile: {AuthFileName}")
     if vncExists: LogData(f"vncfile: {vncFileName}")
     LogData(f"failcount: {failcount}")
+    LogData(f"restart_time: {restart_time}")
 
 
     return rt
