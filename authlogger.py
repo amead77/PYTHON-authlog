@@ -112,7 +112,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-20r0" #really need to update this every time I change something
+version = "2023-08-20r1" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -1013,10 +1013,10 @@ def main():
     signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
     
     CheckIsLinux()
-    ClearIPTables()
         
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
+    ClearIPTables()
     Welcome()
     GetArgs()
     if debugmode:
