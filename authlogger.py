@@ -542,16 +542,18 @@ def OpenAuthAsStream():
     global AuthPos
     global AuthFileHandle
     global authExists
+    global AuthLogInode
 
     AuthPos = 0
     try:
         LogData('opening '+AuthFileName)
         AuthFileHandle = open(AuthFileName, 'r')
+        AuthLogInode = get_file_inode(AuthFileName)
         authExists = True
     except Exception as e:
         authExists = False
         print('Exception: ', e)
-        LogData(AuthFileName+' error while loading')
+        LogData(AuthFileName+' error while loading, exception: '+str(e))
 
 
 #######################
@@ -561,16 +563,18 @@ def OpenVNCAsStream():
     global VNCPos
     global vncFileHandle
     global vncExists
+    global VNCLogInode
 
     VNCPos = 0
     try:
         LogData('opening '+vncFileName)
         vncFileHandle = open(vncFileName, 'r')
+        VNCLogInode = get_file_inode(vncFileName)
         vncExists = True
     except Exception as e:
         vncExists = False
         print('Exception: ', e)
-        LogData(vncFileName+' error while loading') 
+        LogData(vncFileName+' error while loading, exception: '+str(e)) 
 
 
 #######################
@@ -949,20 +953,14 @@ def is_log_rotated( original_inode, file_path ):
 
 #######################
 def ReOpenLogFilesAsStream(which):
-    global AuthFileName
-    global vncFileName
-    global AuthLogInode
-    global VNCLogInode
-
+    #close and reopen the log files as streams
     match which:
         case 'auth':
             CloseAuthStream()
             OpenAuthAsStream()
-            AuthLogInode = get_file_inode(AuthFileName)    
         case 'vnc':
             CloseVNCStream()
             OpenVNCAsStream()
-            VNCLogInode = get_file_inode(vncFileName)
         case _:
             LogData('error: ReOpenLogFilesAsStream(), unknown which: '+which)
 
@@ -1046,8 +1044,7 @@ def main():
             iFlush = 0
             FlushLogFile()
             if BlockStatus: 
-                if debugmode:
-                    print('OLAS-New blocks added to blocklist file')
+                if debugmode: print('New blocks added to blocklist file')
                 SaveBlockList()
                 BlockStatus = False
         CheckRestartTime() #if current time is equal to restart_time, exit the script (bash will restart it)
