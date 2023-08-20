@@ -445,7 +445,7 @@ def ScanAndCompare(aline, authtype):
                 if aline.find('Failed password for',) >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
-                    username = tmp[10]
+                    username = tmp[8]
                 
                 if aline.find('Did not receive identification') >= 0:
                     newblock = True
@@ -744,6 +744,7 @@ def CheckAutoBlockUsers(username):
     ret = False
     username = username.strip()
     username = username.upper()
+    if debugmode: print('checking user: '+username)
     if username == '':
         return ret
     for i in range(len(aAutoBlockUsers)):
@@ -799,22 +800,23 @@ def LoadSettings():
         #sAutoBlockUsers = 'root,pi'
         #SplitAutoBlockUsers(sAutoBlockUsers)
 
-    if os.path.isfile(iniFileName) and not debugmode:
+    if os.path.isfile(iniFileName):
+        LogData('reading settings.ini')
         config = configparser.ConfigParser()
         try:
             config.read(iniFileName)
             # Access the settings
             localip = config.get('Settings','localip', fallback='192.168.')
-            BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
-            AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
+            if not debugmode: BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
+            if not debugmode: AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
             fc = config.get('Settings','failcount', fallback= '2')
-            restart_time = config.get('Settings','restart_time', fallback= '00:10:10')
+            restart_time = config.get('Settings','restart_time', fallback= 'None')
             try:
                 failcount = int(fc)
             except ValueError:
-                LogData('error: failcount is not an integer, using default of 2: '+fc)
+                LogData('error: failcount is not an integer, using default of 2: received-->'+fc)
                 failcount = 2
-            vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
+            if not debugmode: vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
             sAutoBlockUsers = config.get('Settings','autoblockusers', fallback= '')
             # show me the settings
             LogData("loaded settings.ini:")
