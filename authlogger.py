@@ -112,19 +112,23 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-20r0" #really need to update this every time I change something
+version = "2023-08-20r1" #really need to update this every time I change something
 
 class cBlock:
-    def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
+    def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
         self.aDateTime = []
         self.ip = ip
         self.aReason = []
+        self.aUsername = []
 
     def add_datetime(self, vDT):
         self.aDateTime.append(vDT)
 
     def add_reason(self, vReason):
         self.aReason.append(vReason)
+    
+    def add_username(self, vUsername):
+        self.aUsername.append(vUsername)
 
 aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
@@ -243,7 +247,7 @@ def PrintBlockList():
     for i in range(len(aBlocklist)):
         LogData('['+str(i)+'] '+aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].aDateTime)):
-            LogData('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" reason: "+aBlocklist[i].aReason[x])
+            LogData('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" - u=["+aBlocklist[i].aUsername[x]+"] reason: "+aBlocklist[i].aReason[x])
 
 
 #######################
@@ -298,7 +302,6 @@ def FirstRunCheckBlocklist():
     global failcount
     LogData('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
-        
         ###############################################
         # TODO: Block specific users
         # come back to here...
@@ -307,11 +310,15 @@ def FirstRunCheckBlocklist():
         # cBlock object needs to be changed to include the username as a string
         #
         ###############################################
-
         if (len(aBlocklist[x].aDateTime) >= failcount):
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
             BlockIP(aBlocklist[x].ip)
             #print('blocking: "'+aBlocklist[x].ip+'"')
+        else:
+            for y in range(0, len(aBlocklist[x].aUsername)):
+                if CheckAutoBlockUsers(aBlocklist[x].aUsername[y]):
+                    BlockIP(aBlocklist[x].ip)
+                    break
 
 
 #######################
@@ -353,16 +360,18 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
 
     if not foundit:
         if (dtfound >= 0):
-            LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
+            LogData('adding datetime: ['+str(dtfound)+'] '+ip+' u=['+user+'] r=['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
+            aBlocklist[dtfound].add_username(user)
             if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
                 BlockIP(ip)
         else:
-            LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
+            LogData('['+str(len(aBlocklist))+'] adding: '+ip+' u=['+user+'] r=['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
+            aBlocklist[len(aBlocklist)-1].add_username(user)
             if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
                 BlockIP(ip)
     foundit = True if not foundit else False
@@ -446,27 +455,29 @@ def ScanAndCompare(aline, authtype):
         match authtype:
             case 'auth.log':
                 tmp = aline.split(' ') #split the line into an array
-                if aline.find('Failed password for',) >= 0:
+
+                if aline.find(': Failed password for invalid user') >= 0:
+                    newblock = True
+                    checkIP = tmp[len(tmp)-4]
+                    username = tmp[10]
+
+                elif aline.find(': Failed password for') >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
                     username = tmp[8]
                 
-                if aline.find('Did not receive identification') >= 0:
+                elif aline.find('Did not receive identification') >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-3]
 
-                if aline.find('Invalid user',) >= 0:
-                    newblock = True
-                    checkIP = tmp[len(tmp)-3]
-                    username = tmp[7]
-
-                if (aline.find('banner exchange',) >= 0) and (aline.find('invalid format',) >= 0):
+                elif (aline.find('banner exchange') >= 0) and (aline.find('invalid format',) >= 0):
                     newblock = True
                     checkIP = tmp[len(tmp)-5]
 
-                if (aline.find('Unable to negotiate',) >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
+                elif (aline.find('Unable to negotiate') >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
                     newblock = True
                     checkIP = tmp[9]
+                
                 if newblock: PassMe = '(auth.log) '+aline[16:]
                 #if newblock: CheckBlocklist(checkIP, DateString, '(auth.log:'+str(AuthPos) +') '+aline[16:])
 
@@ -476,6 +487,7 @@ def ScanAndCompare(aline, authtype):
                     tmp = aline.split(' ')
                     checkIP = tmp[6]
                     checkIP = checkIP.split('::')[0]
+                
                 if newblock: PassMe = '(vncserver-x11.log) '+aline[30:]
                 #if newblock: CheckBlocklist(checkIP, DateString, '(vncserver-x11.log:'+str(AuthPos) +') '+aline[30:])
         if newblock:
@@ -528,8 +540,9 @@ def CheckRestartTime():
     global restart_time
     global debugmode
     
-    now = datetime.datetime.now()
-    ntime = str(now.hour)+':'+str(now.minute)+':'+str(now.second)
+    #now = datetime.datetime.now()
+    ntime = time.strftime('%H:%M:%S', time.localtime(time.time()))
+    #ntime = str(now.hour)+':'+str(now.minute)+':'+str(now.second)
     if ntime == restart_time:
         LogData('restarting at '+ntime)
         #if not debugmode:
@@ -855,6 +868,7 @@ def LoadSettings():
     if authExists: LogData(f"authfile: {AuthFileName}")
     if vncExists: LogData(f"vncfile: {vncFileName}")
     LogData(f"failcount: {failcount}")
+    LogData(f"restart_time: {restart_time}")
 
 
     return rt
@@ -983,6 +997,7 @@ def main():
 
     AuthPos = 0
     VNCPos = 0
+    flushcount = 80
     LastCheckIn = ""
     sAutoBlockUsers = ''
     iFlush = 0 #flush log data every 10 seconds (approx)
@@ -1003,15 +1018,15 @@ def main():
         
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
+    ClearIPTables()
     Welcome()
     GetArgs()
     if debugmode:
         print("A+") if (os.path.isfile(AuthFileName)) else print("A-")
         print("V+") if (os.path.isfile(vncFileName)) else print("V-")
-
+        flushcount = 10
 
     time.sleep(3)
-    ClearIPTables()
     OpenBlockList()
     PrintBlockList()
     #OpenLogFilesAsStream()
@@ -1024,7 +1039,7 @@ def main():
    
     while True:
         iFlush += 1
-        if iFlush > 80: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
+        if iFlush > flushcount: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
             iFlush = 0
             FlushLogFile()
             if BlockStatus: 

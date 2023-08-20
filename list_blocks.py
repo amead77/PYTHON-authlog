@@ -11,16 +11,20 @@ import datetime #for timestamping#
 
 
 class cBlock:
-    def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
+    def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
         self.aDateTime = []
         self.ip = ip
         self.aReason = []
+        self.aUsername = []
 
     def add_datetime(self, vDT):
         self.aDateTime.append(vDT)
 
     def add_reason(self, vReason):
         self.aReason.append(vReason)
+    
+    def add_username(self, vUsername):
+        self.aUsername.append(vUsername)
 
 aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
@@ -32,7 +36,7 @@ def PrintBlockList():
     for i in range(len(aBlocklist)):
         print('['+str(i)+'] '+aBlocklist[i].ip+':')
         for x in range(len(aBlocklist[i].aDateTime)):
-            print('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" reason: "+aBlocklist[i].aReason[x])
+            print('-->'+ReverseDateTime(aBlocklist[i].aDateTime[x])+" - u=["+aBlocklist[i].aUsername[x]+"] reason: "+aBlocklist[i].aReason[x])
 
 
 #######################
