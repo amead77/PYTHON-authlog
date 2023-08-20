@@ -1013,6 +1013,7 @@ def main():
     signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
     
     CheckIsLinux()
+    ClearIPTables()
         
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
@@ -1024,7 +1025,6 @@ def main():
         flushcount = 10
 
     time.sleep(3)
-    ClearIPTables()
     OpenBlockList()
     PrintBlockList()
     #OpenLogFilesAsStream()
