@@ -79,6 +79,7 @@
 # 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
 # 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
 # 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
+# 2023-08-20 FIXED: auto block users fixed. also no longer overwrites settings.ini on exit, only if it doesn't exist.
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -111,7 +112,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-19r0" #really need to update this every time I change something
+version = "2023-08-19r2" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -347,18 +348,18 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
                     break
 
     if not foundit:
-        if (dtfound >= 0): # or (CheckAutoBlockUsers(reason)):
+        if (dtfound >= 0):
             LogData('adding datetime: ['+str(dtfound)+'] '+ip+' ['+reason+']')
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
-            if (len(aBlocklist[dtfound].aDateTime) >= failcount): # or (CheckAutoBlockUsers(user)):
+            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
                 BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' ['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
-            if failcount == 1: #if failcount is 1, block on first failure
+            if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
                 BlockIP(ip)
     foundit = True if not foundit else False
     if debugmode:
@@ -445,7 +446,7 @@ def ScanAndCompare(aline, authtype):
                 if aline.find('Failed password for',) >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
-                    username = tmp[10]
+                    username = tmp[8]
                 
                 if aline.find('Did not receive identification') >= 0:
                     newblock = True
@@ -692,27 +693,29 @@ def SaveSettings():
     global aAutoBlockUsers
     global sAutoBlockUsers
 
-    LogData('saving settings')
-    # Create a new configparser object
-    config = configparser.ConfigParser()
-    # Set some example settings
-    config['Settings'] = {
-        'localip': localip,
-        'blockfile': BlockFileName,
-        'authfile': AuthFileName,
-        'failcount': failcount,
-        'vncfile': vncFileName,
-        'restart_time': restart_time,
-        'autoblockusers': sAutoBlockUsers
-    }
-    # Save the settings to an INI file
-    try:
-        with open(iniFileName, 'w') as configfile:
-            config.write(configfile)
-        configfile.close()
-    except Exception as e:
-        print('Exception: ', e)
-        LogData('error saving settings.ini')
+    #if not inifile exists, create it
+    if not os.path.isfile(iniFileName):
+        LogData('saving settings')
+        # Create a new configparser object
+        config = configparser.ConfigParser()
+        # Set some example settings
+        config['Settings'] = {
+            'localip': localip,
+            'blockfile': BlockFileName,
+            'authfile': AuthFileName,
+            'failcount': failcount,
+            'vncfile': vncFileName,
+            'restart_time': restart_time,
+            'autoblockusers': sAutoBlockUsers
+        }
+        # Save the settings to an INI file
+        try:
+            with open(iniFileName, 'w') as configfile:
+                config.write(configfile)
+            configfile.close()
+        except Exception as e:
+            print('Exception: ', e)
+            LogData('error saving settings.ini')
 
 
 #######################
@@ -738,14 +741,20 @@ def SplitLocalIP(ipList):
 
 
 #######################
-def CheckAutoBlockUsers(aline):
+def CheckAutoBlockUsers(username):
     #check if user is in the auto block list
     global aAutoBlockUsers
     ret = False
+    username = username.strip()
+    username = username.upper()
+    if debugmode: print('checking user: '+username)
+    if username == '':
+        return ret
     for i in range(len(aAutoBlockUsers)):
-        if aAutoBlockUsers[i] in aline.strip():
+        if aAutoBlockUsers[i] == username:
             ret = True
-            LogData('autoblock user: '+aAutoBlockUsers[i])
+            LogData('Autoblock bad user: '+aAutoBlockUsers[i])
+            return ret
     return ret
 
 
@@ -754,6 +763,7 @@ def SplitAutoBlockUsers(userList):
     #split comma separated list of users into an array
     global aAutoBlockUsers
     #aAutoBlockUsers = userList.split(',')
+    userList = userList.upper()
     LogData('autoblock users: '+str(userList))
     aAutoBlockUsers = [x.strip() for x in userList.split(',')]
     
@@ -790,26 +800,27 @@ def LoadSettings():
         BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = StartDir+slash+'auth.log'
         vncFileName = StartDir+slash+'vncserver-x11.log'
-        sAutoBlockUsers = 'root,pi'
-        SplitAutoBlockUsers(sAutoBlockUsers)
+        #sAutoBlockUsers = 'root,pi'
+        #SplitAutoBlockUsers(sAutoBlockUsers)
 
-    if os.path.isfile(iniFileName) and not debugmode:
+    if os.path.isfile(iniFileName):
+        LogData('reading settings.ini')
         config = configparser.ConfigParser()
         try:
             config.read(iniFileName)
             # Access the settings
             localip = config.get('Settings','localip', fallback='192.168.')
-            BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
-            AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
+            if not debugmode: BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
+            if not debugmode: AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
             fc = config.get('Settings','failcount', fallback= '2')
-            restart_time = config.get('Settings','restart_time', fallback= '00:10:10')
+            restart_time = config.get('Settings','restart_time', fallback= 'None')
             try:
                 failcount = int(fc)
             except ValueError:
+                LogData('error: failcount is not an integer, using default of 2: received-->'+fc)
                 failcount = 2
-            vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
+            if not debugmode: vncFileName = config.get('Settings','vncfile', fallback= StartDir+slash+'vncserver-x11.log')
             sAutoBlockUsers = config.get('Settings','autoblockusers', fallback= '')
-            SplitAutoBlockUsers(sAutoBlockUsers)
             # show me the settings
             LogData("loaded settings.ini:")
 
@@ -817,6 +828,7 @@ def LoadSettings():
         except:
             LogData('error loading settings.ini')
             rt = False
+        SplitAutoBlockUsers(sAutoBlockUsers)
     #else:
     #    LogData('settings.ini not found, using defaults:')
     #    localip = '192.168.'
@@ -925,7 +937,7 @@ def is_log_rotated( original_inode, file_path ):
         return False
     
     if original_inode != current_inode:
-        LogData("Log file has been rotated (inode change): "+str(original_inode)+":"+str(current_inode))
+        LogData("Log file rotated (inode change: "+file_path+"): "+str(original_inode)+":"+str(current_inode))
         return True
     
     #if original_mtime != current_mtime:
