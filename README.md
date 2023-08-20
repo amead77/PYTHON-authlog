@@ -6,6 +6,8 @@ My RPi is on 24/7 and connected to the net.
 
 ### It gets a LOT of failed password attempts.
 
+GPLv3 Licence, see copying.txt
+
 If you're not willing to live on the edge, go use fail2ban, it is probably more suitable anyway.
 
  This is a simple script to monitor the auth.log and vnc files for failed login attempts and block the IP address
