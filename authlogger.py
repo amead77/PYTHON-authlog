@@ -302,7 +302,6 @@ def FirstRunCheckBlocklist():
     global failcount
     LogData('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
-        
         ###############################################
         # TODO: Block specific users
         # come back to here...
@@ -315,11 +314,11 @@ def FirstRunCheckBlocklist():
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
             BlockIP(aBlocklist[x].ip)
             #print('blocking: "'+aBlocklist[x].ip+'"')
-
-        for y in range(0, len(aBlocklist[x].aUsername)):
-            if CheckAutoBlockUsers(aBlocklist[x].aUsername[y]):
-                BlockIP(aBlocklist[x].ip)
-                break
+        else:
+            for y in range(0, len(aBlocklist[x].aUsername)):
+                if CheckAutoBlockUsers(aBlocklist[x].aUsername[y]):
+                    BlockIP(aBlocklist[x].ip)
+                    break
 
 
 #######################
