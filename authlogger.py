@@ -79,6 +79,7 @@
 # 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
 # 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
 # 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
+# 2023-08-20 FIXED: auto block users fixed. also no longer overwrites settings.ini on exit, only if it doesn't exist.
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -111,7 +112,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-19r1" #really need to update this every time I change something
+version = "2023-08-19r2" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -692,27 +693,29 @@ def SaveSettings():
     global aAutoBlockUsers
     global sAutoBlockUsers
 
-    LogData('saving settings')
-    # Create a new configparser object
-    config = configparser.ConfigParser()
-    # Set some example settings
-    config['Settings'] = {
-        'localip': localip,
-        'blockfile': BlockFileName,
-        'authfile': AuthFileName,
-        'failcount': failcount,
-        'vncfile': vncFileName,
-        'restart_time': restart_time,
-        'autoblockusers': sAutoBlockUsers
-    }
-    # Save the settings to an INI file
-    try:
-        with open(iniFileName, 'w') as configfile:
-            config.write(configfile)
-        configfile.close()
-    except Exception as e:
-        print('Exception: ', e)
-        LogData('error saving settings.ini')
+    #if not inifile exists, create it
+    if not os.path.isfile(iniFileName):
+        LogData('saving settings')
+        # Create a new configparser object
+        config = configparser.ConfigParser()
+        # Set some example settings
+        config['Settings'] = {
+            'localip': localip,
+            'blockfile': BlockFileName,
+            'authfile': AuthFileName,
+            'failcount': failcount,
+            'vncfile': vncFileName,
+            'restart_time': restart_time,
+            'autoblockusers': sAutoBlockUsers
+        }
+        # Save the settings to an INI file
+        try:
+            with open(iniFileName, 'w') as configfile:
+                config.write(configfile)
+            configfile.close()
+        except Exception as e:
+            print('Exception: ', e)
+            LogData('error saving settings.ini')
 
 
 #######################
