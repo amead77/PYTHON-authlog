@@ -34,15 +34,25 @@ If testing on Windows, put a auth.log or vncserver-x11.log file in the same dire
 Example logging data kept in logs/authlogger.log
 
 
+
 [2023-08-20 06:35:59]:[7] adding: 85.95.117.176 [(auth.log) whitebox sshd[615634]: banner exchange: Connection from 85.95.117.176 port 57083: invalid format]
+
 [2023-08-20 06:35:59]:saving blocklist
+
 [2023-08-20 06:37:40]:adding datetime: [7] 85.95.117.176 [(auth.log) whitebox sshd[615704]: Invalid user NL5xUDpV2xRa from 85.95.117.176 port 59445]
+
 [2023-08-20 06:37:40]:Autoblock bad user: NL5XUDPV2XRA
+
 [2023-08-20 06:37:40]:Passing to IPTables ->85.95.117.176
+
 [2023-08-20 06:37:41]:saving blocklist
 
 
+
 In the above, first someone attempts to connect at 06:35:59 but the formats don't match, so it gets added to the list of failures (in this case, IP number 7), along with the reason.
+
 Blocklist (containing the just mentioned) gets saved.
+
 Same IP again tries at 06:37:40, this time the format is correct but they use a commonly used username (NL5XUDPV2XRA) that often tries access. This username is in my list of autoblockusers in settings.ini
+
 Because of this the IP gets automatically blocked regardless of the number of login failures permitted.
