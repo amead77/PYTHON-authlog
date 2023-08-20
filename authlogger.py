@@ -112,7 +112,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-19r2" #really need to update this every time I change something
+version = "2023-08-20r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -141,7 +141,7 @@ def ClearScreen():
     #literally ask the OS to clear the screen
     if os.name == 'nt':  # for Windows
         os.system('cls')
-    else:  # for Unix/Linux/MacOS
+    else:  # for Linux
         os.system('clear')
 
 
@@ -191,10 +191,14 @@ def ErrorArg(err):
 #######################
 def CheckIsLinux():
     #this is because it is designed to run on Linux, but I also code on Windows, in which case I don't want it to run all the code
+    #I don't have a mac so I don't know what is needed for mac (other than /)
+    global debugmode
+    global slash
+
     if not sys.platform.startswith('linux'):
-        return False
-    else:
-        return True
+        slash = '\\'
+        debugmode = True
+        print("not running on linux, debug mode enabled")
 
 
 #######################
@@ -209,7 +213,7 @@ def Welcome():
     print('Does some of what other, better, programs do, but worse!\n')
     print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
     print('version: '+version)
-    print("To exit use ctrl-c.")
+    print("To EXIT use CTRL-C.")
     
 
 #######################
@@ -362,8 +366,7 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
             if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
                 BlockIP(ip)
     foundit = True if not foundit else False
-    if debugmode:
-        if foundit: print("CBL-foundit")
+    if debugmode and foundit: print("CBL-foundit")
     return foundit
 
 #######################
@@ -542,16 +545,18 @@ def OpenAuthAsStream():
     global AuthPos
     global AuthFileHandle
     global authExists
+    global AuthLogInode
 
     AuthPos = 0
     try:
         LogData('opening '+AuthFileName)
         AuthFileHandle = open(AuthFileName, 'r')
+        AuthLogInode = get_file_inode(AuthFileName)
         authExists = True
     except Exception as e:
         authExists = False
         print('Exception: ', e)
-        LogData(AuthFileName+' error while loading')
+        LogData(AuthFileName+' error while loading, exception: '+str(e))
 
 
 #######################
@@ -561,16 +566,18 @@ def OpenVNCAsStream():
     global VNCPos
     global vncFileHandle
     global vncExists
+    global VNCLogInode
 
     VNCPos = 0
     try:
         LogData('opening '+vncFileName)
         vncFileHandle = open(vncFileName, 'r')
+        VNCLogInode = get_file_inode(vncFileName)
         vncExists = True
     except Exception as e:
         vncExists = False
         print('Exception: ', e)
-        LogData(vncFileName+' error while loading') 
+        LogData(vncFileName+' error while loading, exception: '+str(e)) 
 
 
 #######################
@@ -882,8 +889,7 @@ def LogData(sdata):
     global Logging
     
     print('['+TimeStamp()+']:'+sdata)
-    if Logging:
-        logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
+    if Logging: logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
 
 
 #######################
@@ -896,8 +902,7 @@ def CloseLogFile():
     global logFileHandle
     global Logging
     
-    if not Logging:
-        return
+    if not Logging: return
     LogData('authlogger stopped.\n')
     logFileHandle.close()
 
@@ -907,8 +912,7 @@ def FlushLogFile():
     global logFileHandle
     global Logging
     
-    if not Logging:
-        return
+    if not Logging: return
     logFileHandle.flush()
 
 
@@ -939,12 +943,21 @@ def is_log_rotated( original_inode, file_path ):
     if original_inode != current_inode:
         LogData("Log file rotated (inode change: "+file_path+"): "+str(original_inode)+":"+str(current_inode))
         return True
-    
-    #if original_mtime != current_mtime:
-    #    print("Log file has been rotated (modification time change).")
-    #    return True
-    
     return False
+
+
+#######################
+def ReOpenLogFilesAsStream(which):
+    #close and reopen the log files as streams
+    match which:
+        case 'auth':
+            CloseAuthStream()
+            OpenAuthAsStream()
+        case 'vnc':
+            CloseVNCStream()
+            OpenVNCAsStream()
+        case _:
+            LogData('error: ReOpenLogFilesAsStream(), unknown which: '+which)
 
 
 ########################################################
@@ -965,11 +978,12 @@ def main():
     global vncFileName
     global VNCPos
     global AuthPos
+    global AuthLogInode
+    global VNCLogInode
 
     AuthPos = 0
     VNCPos = 0
     LastCheckIn = ""
-
     sAutoBlockUsers = ''
     iFlush = 0 #flush log data every 10 seconds (approx)
     runwhich = 4 #every 4th (0.25*4=1 sec) time, check for new blocks
@@ -979,17 +993,13 @@ def main():
     BlockStatus = False #if new blocks added, set to True, so it can save the blocklist file
     AuthLogInode = None
     VNCLogInode = None
-
-
     slash = '/'
     Logging = True
+
     signal.signal(signal.SIGINT, CloseGracefully) #ctrl-c detection
     signal.signal(signal.SIGTERM, CloseGracefully) #shutdown detection
     
-    if not CheckIsLinux():
-        print("not linux, so going into debug mode")
-        slash = '\\'
-        debugmode = True
+    CheckIsLinux()
         
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
@@ -1009,25 +1019,16 @@ def main():
     LogData('opening logfiles as stream')
 
     if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
-    if authExists: 
-        AuthLogInode = get_file_inode(AuthFileName)
-        OpenAuthAsStream()
-    if vncExists: 
-        VNCLogInode = get_file_inode(vncFileName)
-        OpenVNCAsStream()
+    if authExists: OpenAuthAsStream()
+    if vncExists: OpenVNCAsStream()
    
-    #
-    # aahh.. problem. if one of the files doesn't exist, what then...?
-    #
-    #with open(AuthFileName, 'r') as AuthFileHandle, open(vncFileName, 'r') as vncFileHandle:
     while True:
         iFlush += 1
         if iFlush > 80: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
             iFlush = 0
             FlushLogFile()
             if BlockStatus: 
-                if debugmode:
-                    print('OLAS-New blocks added to blocklist file')
+                if debugmode: print('New blocks added to blocklist file')
                 SaveBlockList()
                 BlockStatus = False
         CheckRestartTime() #if current time is equal to restart_time, exit the script (bash will restart it)
@@ -1036,22 +1037,16 @@ def main():
             runnow = 0
             AmAlive()
             
-            if is_log_rotated(AuthLogInode, AuthFileName):
-                CloseAuthStream()
-                OpenAuthAsStream()
-                AuthLogInode = get_file_inode(AuthFileName)
+            if is_log_rotated(AuthLogInode, AuthFileName): ReOpenLogFilesAsStream('auth')
             
-            if is_log_rotated(VNCLogInode, vncFileName):
-                CloseVNCStream()
-                OpenVNCAsStream()
-                VNCLogInode = get_file_inode(vncFileName)
+            if is_log_rotated(VNCLogInode, vncFileName): ReOpenLogFilesAsStream('vnc')
 
             if authExists: authBlocks = CheckAuthLog()
             if vncExists: vncBlocks = CheckVNCLog()
             if authBlocks or vncBlocks: BlockStatus = True
             if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
 
-        time.sleep(0.25)
+        time.sleep(0.25) #only cycle 4hz
     #<--while True:
 
 
