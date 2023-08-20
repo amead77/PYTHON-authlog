@@ -112,7 +112,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-19r2" #really need to update this every time I change something
+version = "2023-08-20r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None): #failcount not needed as count of datetime array will show failures
@@ -947,6 +947,26 @@ def is_log_rotated( original_inode, file_path ):
     return False
 
 
+#######################
+def ReOpenLogFilesAsStream(which):
+    global AuthFileName
+    global vncFileName
+    global AuthLogInode
+    global VNCLogInode
+
+    match which:
+        case 'auth':
+            CloseAuthStream()
+            OpenAuthAsStream()
+            AuthLogInode = get_file_inode(AuthFileName)    
+        case 'vnc':
+            CloseVNCStream()
+            OpenVNCAsStream()
+            VNCLogInode = get_file_inode(vncFileName)
+        case _:
+            LogData('error: ReOpenLogFilesAsStream(), unknown which: '+which)
+
+
 ########################################################
 ####################### [ MAIN ] #######################
 ########################################################
@@ -1036,15 +1056,9 @@ def main():
             runnow = 0
             AmAlive()
             
-            if is_log_rotated(AuthLogInode, AuthFileName):
-                CloseAuthStream()
-                OpenAuthAsStream()
-                AuthLogInode = get_file_inode(AuthFileName)
+            if is_log_rotated(AuthLogInode, AuthFileName): ReOpenLogFilesAsStream('auth')
             
-            if is_log_rotated(VNCLogInode, vncFileName):
-                CloseVNCStream()
-                OpenVNCAsStream()
-                VNCLogInode = get_file_inode(vncFileName)
+            if is_log_rotated(VNCLogInode, vncFileName): ReOpenLogFilesAsStream('vnc')
 
             if authExists: authBlocks = CheckAuthLog()
             if vncExists: vncBlocks = CheckVNCLog()
