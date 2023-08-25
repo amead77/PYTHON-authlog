@@ -275,7 +275,7 @@ def CloseGracefully(signal=None, frame=None, exitcode=0):
 
 
 #######################
-def BlockIP(ip):
+def BlockIP(ip, reason=''):
     #the part that actually blocks the IP by sending details to iptables
     global debugmode
     global aActiveBlocklist
@@ -287,7 +287,7 @@ def BlockIP(ip):
     else:
         if not debugmode:
             aActiveBlocklist.append(ip)
-            LogData('Passing to IPTables ->'+ip)
+            LogData('Passing to IPTables ->'+ip+' reason: '+reason)
             subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
             #subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit, update, now done in CloseGracefully()
         else:
@@ -312,12 +312,12 @@ def FirstRunCheckBlocklist():
         ###############################################
         if (len(aBlocklist[x].aDateTime) >= failcount):
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
-            BlockIP(aBlocklist[x].ip)
+            BlockIP(aBlocklist[x].ip, 'reason: '+str(len(aBlocklist[x].aDateTime))+' login failures from this IP')
             #print('blocking: "'+aBlocklist[x].ip+'"')
         else:
             for y in range(0, len(aBlocklist[x].aUsername)):
                 if CheckAutoBlockUsers(aBlocklist[x].aUsername[y]):
-                    BlockIP(aBlocklist[x].ip)
+                    BlockIP(aBlocklist[x].ip, 'bad user: '+aBlocklist[x].aUsername[y])
                     break
 
 
@@ -364,16 +364,25 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
             aBlocklist[dtfound].add_username(user)
-            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
-                BlockIP(ip)
+            if CheckAutoBlockUsers(user): 
+                BlockIP(ip, 'bad user: '+user)
+            elif (len(aBlocklist[dtfound].aDateTime) >= failcount): 
+                BlockIP(ip, 'failcount: '+str(dtfound)+' login failures from this IP')
+            #if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
+            #    BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' u=['+user+'] r=['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
             aBlocklist[len(aBlocklist)-1].add_username(user)
-            if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
-                BlockIP(ip)
+            if CheckAutoBlockUsers(user): 
+                BlockIP(ip, 'bad user: '+user)
+            elif (len(aBlocklist[dtfound].aDateTime) == 1): 
+                BlockIP(ip, 'failcount: login failures set to 1')
+
+            #if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
+            #    BlockIP(ip)
     foundit = True if not foundit else False
     if debugmode and foundit: print("CBL-foundit")
     return foundit
@@ -773,7 +782,8 @@ def CheckAutoBlockUsers(username):
     for i in range(len(aAutoBlockUsers)):
         if aAutoBlockUsers[i] == username:
             ret = True
-            LogData('Autoblock bad user: '+aAutoBlockUsers[i])
+            if debugmode: print('bad user: '+username)
+            #LogData('Autoblock bad user: '+aAutoBlockUsers[i]) #spams logfile, now incl. in IP block reason
             return ret
     return ret
 
