@@ -18,3 +18,4 @@ __pycache__/
 !README.md
 !alog.sh
 !copying.txt
+!version_update.py
