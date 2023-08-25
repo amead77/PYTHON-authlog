@@ -100,6 +100,7 @@
 ####################### [ Setup ] #######################
 #########################################################
 #from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate, as it's annoying
+import errno
 import os, argparse, sys, io, time, subprocess
 import signal #for ctrl-c detection
 import pickle #for saving blocklist
