@@ -187,6 +187,8 @@ def ErrorArg(err):
             print("Ctrl-C detected, exiting gracefully.") #need to figure out how to pass from signal
         case 14:
             print("Shutdown demanded")
+        case 15:
+            print("Error creating logfile directory.")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -896,7 +898,15 @@ def OpenLogFile():
         return
 
     if not os.path.isdir(StartDir + slash + 'logs'):
-        os.mkdir(StartDir + slash + 'logs')
+        try:
+            os.mkdir(StartDir + slash + 'logs')
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                Logging = False
+                CloseGracefully(exitcode = 15)
+            else:
+                print('log directory already exists, but should not be here as OS said it wasn''t here')
+
     LogFileName = StartDir + slash + 'logs' + slash + 'authlogger.log'
     try:
         logFileHandle = open(LogFileName, 'a')
