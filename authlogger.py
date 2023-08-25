@@ -80,6 +80,7 @@
 # 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
 # 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
 # 2023-08-20 FIXED: auto block users fixed. also no longer overwrites settings.ini on exit, only if it doesn't exist.
+# 2023-08-25 CHANGED: more verbose in blocking IPs, some more exception handling.
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -112,7 +113,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-20r1" #really need to update this every time I change something
+version = "v01.0.2023-08-25r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -187,6 +188,8 @@ def ErrorArg(err):
             print("Ctrl-C detected, exiting gracefully.") #need to figure out how to pass from signal
         case 14:
             print("Shutdown demanded")
+        case 15:
+            print("Error creating logfile directory.")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -275,7 +278,7 @@ def CloseGracefully(signal=None, frame=None, exitcode=0):
 
 
 #######################
-def BlockIP(ip):
+def BlockIP(ip, reason=''):
     #the part that actually blocks the IP by sending details to iptables
     global debugmode
     global aActiveBlocklist
@@ -287,7 +290,7 @@ def BlockIP(ip):
     else:
         if not debugmode:
             aActiveBlocklist.append(ip)
-            LogData('Passing to IPTables ->'+ip)
+            LogData('Passing to IPTables ->'+ip+' reason: '+reason)
             subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
             #subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit, update, now done in CloseGracefully()
         else:
@@ -312,12 +315,12 @@ def FirstRunCheckBlocklist():
         ###############################################
         if (len(aBlocklist[x].aDateTime) >= failcount):
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
-            BlockIP(aBlocklist[x].ip)
+            BlockIP(aBlocklist[x].ip, 'reason: '+str(len(aBlocklist[x].aDateTime))+' login failures from this IP')
             #print('blocking: "'+aBlocklist[x].ip+'"')
         else:
             for y in range(0, len(aBlocklist[x].aUsername)):
                 if CheckAutoBlockUsers(aBlocklist[x].aUsername[y]):
-                    BlockIP(aBlocklist[x].ip)
+                    BlockIP(aBlocklist[x].ip, 'bad user: '+aBlocklist[x].aUsername[y])
                     break
 
 
@@ -364,16 +367,25 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
             aBlocklist[dtfound].add_datetime(timeblocked)
             aBlocklist[dtfound].add_reason(reason)
             aBlocklist[dtfound].add_username(user)
-            if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
-                BlockIP(ip)
+            if CheckAutoBlockUsers(user): 
+                BlockIP(ip, 'bad user: '+user)
+            elif (len(aBlocklist[dtfound].aDateTime) >= failcount): 
+                BlockIP(ip, 'failcount: '+str(dtfound)+' login failures from this IP')
+            #if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
+            #    BlockIP(ip)
         else:
             LogData('['+str(len(aBlocklist))+'] adding: '+ip+' u=['+user+'] r=['+reason+']')
             aBlocklist.append(cBlock(ip=ip))
             aBlocklist[len(aBlocklist)-1].add_datetime(timeblocked)
             aBlocklist[len(aBlocklist)-1].add_reason(reason)
             aBlocklist[len(aBlocklist)-1].add_username(user)
-            if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
-                BlockIP(ip)
+            if CheckAutoBlockUsers(user): 
+                BlockIP(ip, 'bad user: '+user)
+            elif (len(aBlocklist[dtfound].aDateTime) == 1): 
+                BlockIP(ip, 'failcount: login failures set to 1')
+
+            #if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
+            #    BlockIP(ip)
     foundit = True if not foundit else False
     if debugmode and foundit: print("CBL-foundit")
     return foundit
@@ -767,13 +779,14 @@ def CheckAutoBlockUsers(username):
     ret = False
     username = username.strip()
     username = username.upper()
-    if debugmode: print('checking user: '+username)
     if username == '':
         return ret
+    if debugmode: print('checking user: '+username)
     for i in range(len(aAutoBlockUsers)):
         if aAutoBlockUsers[i] == username:
             ret = True
-            LogData('Autoblock bad user: '+aAutoBlockUsers[i])
+            if debugmode: print('bad user: '+username)
+            #LogData('Autoblock bad user: '+aAutoBlockUsers[i]) #spams logfile, now incl. in IP block reason
             return ret
     return ret
 
@@ -886,7 +899,15 @@ def OpenLogFile():
         return
 
     if not os.path.isdir(StartDir + slash + 'logs'):
-        os.mkdir(StartDir + slash + 'logs')
+        try:
+            os.mkdir(StartDir + slash + 'logs')
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                Logging = False
+                CloseGracefully(exitcode = 15)
+            else:
+                print('log directory already exists, but should not be here as OS said it wasn''t here')
+
     LogFileName = StartDir + slash + 'logs' + slash + 'authlogger.log'
     try:
         logFileHandle = open(LogFileName, 'a')
