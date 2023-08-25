@@ -776,9 +776,9 @@ def CheckAutoBlockUsers(username):
     ret = False
     username = username.strip()
     username = username.upper()
-    if debugmode: print('checking user: '+username)
     if username == '':
         return ret
+    if debugmode: print('checking user: '+username)
     for i in range(len(aAutoBlockUsers)):
         if aAutoBlockUsers[i] == username:
             ret = True
