@@ -80,6 +80,7 @@
 # 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
 # 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
 # 2023-08-20 FIXED: auto block users fixed. also no longer overwrites settings.ini on exit, only if it doesn't exist.
+# 2023-08-25 CHANGED: more verbose in blocking IPs, some more exception handling.
 
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -112,7 +113,7 @@ import configparser #for reading ini file
 
 debugmode = False
 
-version = "2023-08-20r1" #really need to update this every time I change something
+version = "v01.0.2023-08-25r0" #really need to update this every time I change something
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
