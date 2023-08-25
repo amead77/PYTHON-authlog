@@ -100,6 +100,7 @@
 ####################### [ Setup ] #######################
 #########################################################
 #from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate, as it's annoying
+import errno
 import os, argparse, sys, io, time, subprocess
 import signal #for ctrl-c detection
 import pickle #for saving blocklist
@@ -112,8 +113,9 @@ import configparser #for reading ini file
 #from sshkeyboard import listen_keyboard, stop_listening
 
 debugmode = False
-
-version = "v01.0.2023-08-25r0" #really need to update this every time I change something
+#version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
+#AUTO-V
+version = "v1.0-2023/08/26r11"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
