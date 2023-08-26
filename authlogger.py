@@ -115,7 +115,7 @@ import configparser #for reading ini file
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/08/26r11"
+version = "v1.0-2023/08/26r12"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -383,7 +383,7 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
             aBlocklist[len(aBlocklist)-1].add_username(user)
             if CheckAutoBlockUsers(user): 
                 BlockIP(ip, 'bad user: '+user)
-            elif (len(aBlocklist[dtfound].aDateTime) == 1): 
+            elif (failcount == 1): 
                 BlockIP(ip, 'failcount: login failures set to 1')
 
             #if (failcount == 1) or (CheckAutoBlockUsers(user)): #if failcount is 1, block on first failure
