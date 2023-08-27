@@ -115,7 +115,7 @@ import configparser #for reading ini file
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/08/26r12"
+version = "v1.0-2023/08/27r00"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -1041,7 +1041,6 @@ def main():
         
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
-    ClearIPTables()
     Welcome()
     GetArgs()
     if debugmode:
@@ -1050,6 +1049,7 @@ def main():
         flushcount = 10
 
     time.sleep(3)
+    ClearIPTables()
     OpenBlockList()
     PrintBlockList()
     #OpenLogFilesAsStream()
