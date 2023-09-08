@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/08/27r02"
+version = "v1.0-2023/09/08r00"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -481,7 +481,7 @@ def ScanAndCompare(aline, authtype):
                 elif aline.find(': Failed password for') >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
-                    username = tmp[8]
+                    username = tmp[len(tmp)-6]
                 
                 elif aline.find('Did not receive identification') >= 0:
                     newblock = True
