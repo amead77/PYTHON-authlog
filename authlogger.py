@@ -111,11 +111,14 @@ import configparser #for reading ini file
 #import curses #for keyboard input (curses.wrapper()) hopefully works over ssh
 
 #from sshkeyboard import listen_keyboard, stop_listening
+import gzip #these two for gzipping the log file
+import shutil
+
 
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/08/26r12"
+version = "v1.0-2023/09/08r00"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -478,7 +481,7 @@ def ScanAndCompare(aline, authtype):
                 elif aline.find(': Failed password for') >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
-                    username = tmp[8]
+                    username = tmp[len(tmp)-6]
                 
                 elif aline.find('Did not receive identification') >= 0:
                     newblock = True
@@ -997,6 +1000,26 @@ def ReOpenLogFilesAsStream(which):
             LogData('error: ReOpenLogFilesAsStream(), unknown which: '+which)
 
 
+#######################
+def CheckLogSize():
+    #check if log file is too big, if so, rename it and start a new one
+    global LogFileName
+    global logFileHandle
+    global Logging
+    
+    if not Logging: return
+    if os.path.isfile(LogFileName):
+        if os.stat(LogFileName).st_size > 1000000:
+            print('Cycling logfile')
+            logFileHandle.close()
+            try:
+                os.rename(LogFileName, LogFileName+'.old')
+            except OSError as e:
+                print('error renaming logfile')
+                ErrorArg(6)
+            OpenLogFile()
+
+
 ########################################################
 ####################### [ MAIN ] #######################
 ########################################################
@@ -1041,7 +1064,6 @@ def main():
         
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
-    ClearIPTables()
     Welcome()
     GetArgs()
     if debugmode:
@@ -1050,6 +1072,7 @@ def main():
         flushcount = 10
 
     time.sleep(3)
+    ClearIPTables()
     OpenBlockList()
     PrintBlockList()
     #OpenLogFilesAsStream()

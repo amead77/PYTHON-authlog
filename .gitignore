@@ -19,3 +19,4 @@ __pycache__/
 !alog.sh
 !copying.txt
 !version_update.py
+!lingo.py
