@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/09/08r00"
+version = "v1.0-2023/09/23r03"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -310,14 +310,6 @@ def FirstRunCheckBlocklist():
     global failcount
     LogData('checking blocklist/first run: '+str(len(aBlocklist))+ ' entries')
     for x in range(0, len(aBlocklist)):
-        ###############################################
-        # TODO: Block specific users
-        # come back to here...
-        # add in auto block user (CheckAutoBlockUsers()) here
-        # but requires a fundamental change to the blocklist.
-        # cBlock object needs to be changed to include the username as a string
-        #
-        ###############################################
         if (len(aBlocklist[x].aDateTime) >= failcount):
             #print('len(aBlocklist[x].aDateTime) '+str(len(aBlocklist[x].aDateTime)))
             BlockIP(aBlocklist[x].ip, 'reason: '+str(len(aBlocklist[x].aDateTime))+' login failures from this IP')
@@ -375,7 +367,7 @@ def CheckBlocklist(ip, timeblocked, reason, user=''):
             if CheckAutoBlockUsers(user): 
                 BlockIP(ip, 'bad user: '+user)
             elif (len(aBlocklist[dtfound].aDateTime) >= failcount): 
-                BlockIP(ip, 'failcount: '+str(dtfound)+' login failures from this IP')
+                BlockIP(ip, 'failcount: '+str(len(aBlocklist[dtfound].aDateTime))+' login failures from this IP')
             #if (len(aBlocklist[dtfound].aDateTime) >= failcount) or (CheckAutoBlockUsers(user)):
             #    BlockIP(ip)
         else:
@@ -919,7 +911,7 @@ def OpenLogFile():
     except:
         print('error opening logfile')
         ErrorArg(5)
-    LogData('authlogger started.')
+    LogData('authlogger started. Version: '+version)
 
 
 #######################
