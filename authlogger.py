@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/09/23r03"
+version = "v1.0-2023/10/01r01"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -468,7 +468,7 @@ def ScanAndCompare(aline, authtype):
                 if aline.find(': Failed password for invalid user') >= 0:
                     newblock = True
                     checkIP = tmp[len(tmp)-4]
-                    username = tmp[10]
+                    username = tmp[len(tmp)-6]
 
                 elif aline.find(': Failed password for') >= 0:
                     newblock = True
@@ -486,7 +486,16 @@ def ScanAndCompare(aline, authtype):
                 elif (aline.find('Unable to negotiate') >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
                     newblock = True
                     checkIP = tmp[9]
-                
+
+                elif (aline.find('(sshd:auth): authentication failure;') >= 0):
+                    newblock = True
+                    if aline.find(' user=') >= 0:
+                        checkIP = tmp[len(tmp)-3]
+                        username = tmp[len(tmp)-1]
+                    else: 
+                        username = 'none'
+                        checkIP = tmp[len(tmp)-1]
+                  
                 if newblock: PassMe = '(auth.log) '+aline[16:]
                 #if newblock: CheckBlocklist(checkIP, DateString, '(auth.log:'+str(AuthPos) +') '+aline[16:])
 
@@ -1001,10 +1010,12 @@ def CheckLogSize():
     
     if not Logging: return
     if os.path.isfile(LogFileName):
-        if os.stat(LogFileName).st_size > 1000000:
+        if os.stat(LogFileName).st_size > (1024 * 1024 * 10): #10MB
             print('Cycling logfile')
             logFileHandle.close()
             try:
+                if os.path.isfile(LogFileName+'.old'):
+                    os.remove(LogFileName+'.old')
                 os.rename(LogFileName, LogFileName+'.old')
             except OSError as e:
                 print('error renaming logfile')
