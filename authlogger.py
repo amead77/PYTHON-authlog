@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/10/01r01"
+version = "v1.0-2023/10/04r02"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -549,6 +549,7 @@ def SaveBlockList():
     LogData('saving blocklist')
     with open(BlockFileName, "wb") as fblockfile:
         pickle.dump(aBlocklist, fblockfile)
+        fblockfile.flush()
     #fblockfile.close() not required with 'with'
 
 
@@ -928,9 +929,12 @@ def LogData(sdata):
     #write timestamp+sdata to logfile
     global logFileHandle
     global Logging
+    global newlogdata
     
     print('['+TimeStamp()+']:'+sdata)
-    if Logging: logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
+    if Logging: 
+        logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
+        newlogdata = True
 
 
 #######################
@@ -945,6 +949,7 @@ def CloseLogFile():
     
     if not Logging: return
     LogData('authlogger stopped.\n')
+    FlushLogFile()
     logFileHandle.close()
 
 
@@ -952,9 +957,11 @@ def CloseLogFile():
 def FlushLogFile():
     global logFileHandle
     global Logging
+    global newlogdata
     
     if not Logging: return
     logFileHandle.flush()
+    newlogdata = False
 
 
 #######################
@@ -1043,7 +1050,9 @@ def main():
     global AuthPos
     global AuthLogInode
     global VNCLogInode
+    global newlogdata
 
+    newlogdata = False
     AuthPos = 0
     VNCPos = 0
     flushcount = 80
