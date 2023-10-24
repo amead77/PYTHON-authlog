@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/10/04r02"
+version = "v1.0-2023/10/24r01"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -933,6 +933,7 @@ def LogData(sdata):
     
     print('['+TimeStamp()+']:'+sdata)
     if Logging: 
+        CheckLogSize()
         logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
         newlogdata = True
 
@@ -1022,7 +1023,9 @@ def CheckLogSize():
             logFileHandle.close()
             try:
                 if os.path.isfile(LogFileName+'.old'):
-                    os.remove(LogFileName+'.old')
+                    if os.path.isfile(LogFileName+'.old.1'):
+                        os.remove(LogFileName+'.old.1')
+                    os.rename(LogFileName+'.old', LogFileName+'.old.1')
                 os.rename(LogFileName, LogFileName+'.old')
             except OSError as e:
                 print('error renaming logfile')
