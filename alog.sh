@@ -1,5 +1,5 @@
 #!/bin/bash
-#this doesn't work and I don't know why, sudo python authlogger.py works fine
+#this doesn't work and I don't know why, sudo ./alog.sh works fine
 #from cmd line, but not when being called by tmux -c
 while :
 do
