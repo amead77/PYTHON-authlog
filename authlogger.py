@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/10/24r02"
+version = "v1.0-2023/11/01r00"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -991,6 +991,7 @@ def is_log_rotated( original_inode, file_path ):
     
     if original_inode != current_inode:
         LogData("Log file rotated (inode change: "+file_path+"): "+str(original_inode)+":"+str(current_inode))
+        time.sleep(1.5) #wait to prevent double seeing the inode change.
         return True
     return False
 
