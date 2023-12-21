@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/11/01r00"
+version = "v1.0-2023/11/02r00"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -1021,6 +1021,7 @@ def CheckLogSize():
     if os.path.isfile(LogFileName):
         if os.stat(LogFileName).st_size > (1024 * 1024 * 10): #10MB
             print('Cycling logfile')
+            FlushLogFile()
             logFileHandle.close()
             try:
                 if os.path.isfile(LogFileName+'.old'):
