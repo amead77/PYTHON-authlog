@@ -113,12 +113,12 @@ import configparser #for reading ini file
 #from sshkeyboard import listen_keyboard, stop_listening
 import gzip #these two for gzipping the log file
 import shutil
-
+#import systemd.daemon #disabled due to package not installing
 
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/11/02r00"
+version = "v1.0-2023/12/21r09"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -221,11 +221,13 @@ def Help():
 
 #######################
 def Welcome():
-    print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
-    print('Does some of what other, better, programs do, but worse!\n')
-    print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
-    print('version: '+version)
-    print("To EXIT use CTRL-C.")
+    global ScreenLog
+    if ScreenLog:
+        print('\n[==-- Wheel reinvention society presents: authlogger! --==]\n')
+        print('Does some of what other, better, programs do, but worse!\n')
+        print('Seriously, if you want to block IPs, use fail2ban, it\'s much better, but this is simpler...\n')
+        print('version: '+version)
+        print("To EXIT use CTRL-C.")
     
 
 #######################
@@ -238,11 +240,16 @@ def GetArgs():
     global StartDir
     global slash
     global Logging
+    global ScreenLog
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
+    parser.add_argument('-s', '--noscreenlog', action='store_false', help='turn off logging to screen')
+    #no screen log is not fully implemented yet. partly because when running at console you need some idea of what is going on
+    #
     args = parser.parse_args()
     Logging = args.nolog
+    ScreenLog = args.noscreenlog
     iniFileName = StartDir+slash+"settings.ini"
     if not LoadSettings(): ErrorArg(8)
 
@@ -406,7 +413,7 @@ def GetDateTime(authstring, authtype):
                 timey = timey[:10]+' '+timey[11:19]
                 timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey, "%Y-%m-%d %H:%M:%S"))
             except:
-                print('error: '+authstring+'--'+authtype)
+                LogData('error: '+authstring+'--'+authtype)
                 timey = "20000101000000"
 
     return timey
@@ -531,7 +538,7 @@ def OpenBlockList():
                 aBlocklist = pickle.load(fblockfile)
             #fblockfile.close() not required with 'with'
         except Exception as e:
-            print('Exception: ', e)
+            LogData('Exception: '+str(e))
             LogData('blocklist file is corrupt, will be overwritten on save')
 
     else:
@@ -587,7 +594,7 @@ def OpenAuthAsStream():
         authExists = True
     except Exception as e:
         authExists = False
-        print('Exception: ', e)
+        LogData('Exception: '+str(e))
         LogData(AuthFileName+' error while loading, exception: '+str(e))
 
 
@@ -608,7 +615,7 @@ def OpenVNCAsStream():
         vncExists = True
     except Exception as e:
         vncExists = False
-        print('Exception: ', e)
+        LogData('Exception: '+str(e))
         LogData(vncFileName+' error while loading, exception: '+str(e)) 
 
 
@@ -625,7 +632,7 @@ def CloseAuthStream():
         AuthFileHandle.close()
         authExists = False
     except Exception as e:
-        print('Exception: ', e)
+        LogData('Exception: '+str(e))
         LogData(AuthFileName+' error while closing')
 
 
@@ -642,7 +649,7 @@ def CloseVNCStream():
         vncFileHandle.close()
         vncExists = False
     except Exception as e:
-        print('Exception: ', e)
+        LogData('Exception: '+str(e))
         LogData(vncFileName+' error while closing')
 
 
@@ -753,7 +760,7 @@ def SaveSettings():
                 config.write(configfile)
             configfile.close()
         except Exception as e:
-            print('Exception: ', e)
+            LogData('Exception: '+str(e))
             LogData('error saving settings.ini')
 
 
@@ -900,9 +907,10 @@ def OpenLogFile():
     global logFileHandle
     global slash
     global Logging
-    
+    global ScreenLog
+
     if not Logging:
-        print('-- logging to file is off --')
+        if ScreenLog: print('-- logging to file is off --')
         return
 
     if not os.path.isdir(StartDir + slash + 'logs'):
@@ -913,13 +921,13 @@ def OpenLogFile():
                 Logging = False
                 CloseGracefully(exitcode = 15)
             else:
-                print('log directory already exists, but should not be here as OS said it wasn''t here')
+                if ScreenLog: print('log directory already exists, but should not be here as OS said it wasn''t here')
 
     LogFileName = StartDir + slash + 'logs' + slash + 'authlogger.log'
     try:
         logFileHandle = open(LogFileName, 'a')
     except:
-        print('error opening logfile')
+        if ScreenLog: print('error opening logfile')
         ErrorArg(5)
     LogData('authlogger started. Version: '+version)
 
@@ -930,8 +938,10 @@ def LogData(sdata):
     global logFileHandle
     global Logging
     global newlogdata
+    global ScreenLog
+
+    if ScreenLog: print('['+TimeStamp()+']:'+sdata)
     
-    print('['+TimeStamp()+']:'+sdata)
     if Logging: 
         CheckLogSize()
         logFileHandle.write('['+TimeStamp()+']:'+sdata + '\n')
@@ -1020,7 +1030,7 @@ def CheckLogSize():
     if not Logging: return
     if os.path.isfile(LogFileName):
         if os.stat(LogFileName).st_size > (1024 * 1024 * 10): #10MB
-            print('Cycling logfile')
+            LogData('Cycling logfile')
             FlushLogFile()
             logFileHandle.close()
             try:
@@ -1030,7 +1040,7 @@ def CheckLogSize():
                     os.rename(LogFileName+'.old', LogFileName+'.old.1')
                 os.rename(LogFileName, LogFileName+'.old')
             except OSError as e:
-                print('error renaming logfile')
+                LogData('error renaming logfile: '+str(e))
                 ErrorArg(6)
             OpenLogFile()
 
@@ -1056,7 +1066,9 @@ def main():
     global AuthLogInode
     global VNCLogInode
     global newlogdata
+    global ScreenLog
 
+    ScreenLog = True
     newlogdata = False
     AuthPos = 0
     VNCPos = 0
@@ -1082,7 +1094,7 @@ def main():
     StartDir = os.getcwd().removesuffix(slash)
     OpenLogFile()
     Welcome()
-    GetArgs()
+    GetArgs() #switched order so screen logging only happens if not disabled
     if debugmode:
         print("A+") if (os.path.isfile(AuthFileName)) else print("A-")
         print("V+") if (os.path.isfile(vncFileName)) else print("V-")
@@ -1099,8 +1111,16 @@ def main():
     if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
     if authExists: OpenAuthAsStream()
     if vncExists: OpenVNCAsStream()
-   
+
+    # Notify systemd that the service is ready
+    systemd.daemon.notify("READY=1")   
+
     while True:
+        #systemd code disabled as package not installing
+        #if systemd.daemon.is_reloading_or_stopping():
+        #    CloseGracefully(exitcode=10)
+         # Add your code here to handle the restart or quit order
+        #    pass
         iFlush += 1
         if iFlush > flushcount: #flush log every 20 (0.25*80) seconds, not immediately as slows things down
             iFlush = 0
