@@ -118,7 +118,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/10/24r01"
+version = "v1.0-2023/10/24r02"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -830,7 +830,7 @@ def LoadSettings():
     #set some defaults, ini will override
     localip = '192.168.'
     failcount = 2
-    restart_time = '00:10:10'
+    restart_time = 'None' #'00:10:10'
     rt = True
     if not debugmode:
         BlockFileName = StartDir+slash+'blocklist.dat'
