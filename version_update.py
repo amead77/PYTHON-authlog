@@ -4,6 +4,12 @@
 #and updates it to: version = "v01.0-2023/08/25r01"
 #if the date has changed, also update the date part of the version number
 
+
+################################################
+### must revisit this to make it only change the version line, not the whole thing
+################################################
+
+
 import os, sys, datetime, time
 
 def GetVersion(inputstr):

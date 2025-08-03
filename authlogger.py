@@ -81,12 +81,12 @@
 # 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
 # 2023-08-20 FIXED: auto block users fixed. also no longer overwrites settings.ini on exit, only if it doesn't exist.
 # 2023-08-25 CHANGED: more verbose in blocking IPs, some more exception handling.
-
+#
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
 # the datetime that they failed login.
 # If the number of datetime entries is >= failcount, then send to IPTables to add to firewall rules.
-#
+
 
 
 ####################### [ Coding Style ] #######################
@@ -114,11 +114,10 @@ import configparser #for reading ini file
 import gzip #these two for gzipping the log file
 import shutil
 
-
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2023/11/02r00"
+version = "v1.0-2025/08/03r08"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -273,7 +272,7 @@ def CloseGracefully(signal=None, frame=None, exitcode=0):
     global authExists
     #AuthFileHandle.close() #not requred, as with statement closes it automatically
     LogData('closing streams')
-    if vncExists and (exitcode != 10): vncFileHandle.close()
+    #if vncExists and (exitcode != 10): vncFileHandle.close()
     if authExists and (exitcode != 10): AuthFileHandle.close()
     SaveBlockList()
     SaveSettings()
@@ -601,15 +600,17 @@ def OpenVNCAsStream():
     global VNCLogInode
 
     VNCPos = 0
-    try:
-        LogData('opening '+vncFileName)
-        vncFileHandle = open(vncFileName, 'r')
-        VNCLogInode = get_file_inode(vncFileName)
-        vncExists = True
-    except Exception as e:
-        vncExists = False
-        print('Exception: ', e)
-        LogData(vncFileName+' error while loading, exception: '+str(e)) 
+    vncExists = False
+    if vncFileName != '':
+        try:
+            LogData('opening '+vncFileName)
+            vncFileHandle = open(vncFileName, 'r')
+            VNCLogInode = get_file_inode(vncFileName)
+            vncExists = True
+        except Exception as e:
+            vncExists = False
+            print('Exception: ', e)
+            LogData(vncFileName+' error while loading, exception: '+str(e)) 
 
 
 #######################
@@ -637,13 +638,14 @@ def CloseVNCStream():
     global vncFileHandle
     global vncExists
 
-    try:
-        LogData('closing '+vncFileName)
-        vncFileHandle.close()
-        vncExists = False
-    except Exception as e:
-        print('Exception: ', e)
-        LogData(vncFileName+' error while closing')
+    if vncExists:
+        try:
+            vncExists = False
+            LogData('closing '+vncFileName)
+            vncFileHandle.close()
+        except Exception as e:
+            print('Exception: ', e)
+            LogData(vncFileName+' error while closing')
 
 
 #######################
@@ -1096,9 +1098,10 @@ def main():
 
     LogData('opening logfiles as stream')
 
-    if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
+    #if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
+    if not authExists: CloseGracefully(10) #if neither file exists, exit, why else are we running?
     if authExists: OpenAuthAsStream()
-    if vncExists: OpenVNCAsStream()
+    #if vncExists: OpenVNCAsStream()
    
     while True:
         iFlush += 1
@@ -1117,12 +1120,13 @@ def main():
             
             if is_log_rotated(AuthLogInode, AuthFileName): ReOpenLogFilesAsStream('auth')
             
-            if is_log_rotated(VNCLogInode, vncFileName): ReOpenLogFilesAsStream('vnc')
+            #if is_log_rotated(VNCLogInode, vncFileName): ReOpenLogFilesAsStream('vnc')
 
             if authExists: authBlocks = CheckAuthLog()
-            if vncExists: vncBlocks = CheckVNCLog()
+            #if vncExists: vncBlocks = CheckVNCLog()
             if authBlocks or vncBlocks: BlockStatus = True
-            if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
+            #if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
+            if not authExists: CloseGracefully(10) #because a log cycle could cause one to not exist
 
         time.sleep(0.25) #only cycle 4hz
     #<--while True:
