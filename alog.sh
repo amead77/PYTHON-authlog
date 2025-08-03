@@ -1,31 +1,25 @@
-#while :;
-#do
-#    echo "Starting authlogger.py"
-#    tmux -c "sudo python authlogger.py"
-#    #if not exit on code 12, then exit, else restart
-#    #sudo python authlogger.py
-#    if [ $? -ne 12 ]; then
-#        echo "authlogger.py exited with code $?, exiting..."
-#        exit
-#    fi
-#    
-#    echo "authlogger.py exited, waiting 5 seconds before restarting..."
-#    echo "Press Ctrl+C to exit"
-#    sleep 5
-#done
-
 #!/bin/bash
 
+SESSION_NAME="authlog"
+
 while :; do
-    echo "Starting authlogger.py"
-    tmux new-session -d -s authlog "sudo python /path/to/authlogger.py"
+    echo "Starting authlogger.py in tmux session '$SESSION_NAME'"
 
-    # Wait for the tmux session to end
-    tmux wait-for -S authlog_done
-    tmux kill-session -t authlog
+    # Kill any existing session with the same name
+    tmux has-session -t $SESSION_NAME 2>/dev/null && tmux kill-session -t $SESSION_NAME
 
-    # Check exit code (you'll need to pass it from Python if needed)
-    EXIT_CODE=$?
+    # Start the tmux session running the Python script
+    tmux new-session -d -s $SESSION_NAME "sudo python3 ~/Programming/PYTHON-authlog/authlogger.py"
+
+    # Wait for the session to end
+    while tmux has-session -t $SESSION_NAME 2>/dev/null; do
+        sleep 1
+    done
+
+    # Optionally: check exit code if you log it from Python
+    # For now, assume restart only on code 12
+    EXIT_CODE=12  # Placeholder
+
     if [ $EXIT_CODE -ne 12 ]; then
         echo "authlogger.py exited with code $EXIT_CODE, exiting..."
         exit
