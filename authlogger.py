@@ -117,7 +117,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2025/08/03r08"
+version = "v1.0-2025/08/14r00"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -393,8 +393,14 @@ def GetDateTime(authstring, authtype):
             #get the date and time from the auth.log string, convert to YYYYMMDDHHMMSS
             #always use current year, as auth.log doesn't have year
             try:
-                timey = time.strftime('%Y', time.localtime(time.time()))
-                timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
+#                timey = time.strftime('%Y', time.localtime(time.time()))
+#                timey = time.strftime('%Y%m%d%H%M%S', time.strptime(timey+" "+authstring[:15], "%Y %b %d %H:%M:%S"))
+            # Extract ISO datetime from the start of the string
+                dt_str = authstring.split()[0]
+                # Remove microseconds and timezone for consistent formatting
+                dt_obj = datetime.datetime.fromisoformat(dt_str.split('+')[0])
+                timey = dt_obj.strftime('%Y%m%d%H%M%S')
+
             except:
                 timey = "20000101000000"
     
