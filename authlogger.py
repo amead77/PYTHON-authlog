@@ -139,6 +139,7 @@ aBlocklist = [] #array of cBlock objects
 aActiveBlocklist = [] #array of ip addresses
 aIgnoreIPs = [] #array of ip addresses to ignore
 aAutoBlockUsers = [] #array of users to auto block, such as root, pi, etc
+iptablesAvailable = False #flag to indicate if iptables is available
 
 #############################################################
 ####################### [ Functions ] #######################
@@ -194,6 +195,10 @@ def ErrorArg(err):
             print("Shutdown demanded")
         case 15:
             print("Error creating logfile directory.")
+        case 16:
+            print("iptables not found or not installed. Cannot block IPs without iptables.")
+        case 17:
+            print("Error writing to blocklist file. Check permissions.")
         case _:
             print("dunno, but bye!")
     sys.exit(err)
@@ -258,8 +263,45 @@ def PrintBlockList():
 
 
 #######################
+def CheckIPTablesInstalled():
+    #check if iptables is installed and accessible
+    global iptablesAvailable
+    global debugmode
+    
+    try:
+        result = subprocess.run(['/sbin/iptables', '--version'], capture_output=True, timeout=1)
+        if result.returncode == 0:
+            iptablesAvailable = True
+            LogData('iptables found: '+result.stdout.decode().strip())
+            return True
+        else:
+            iptablesAvailable = False
+            LogData('iptables found but returned error code: '+str(result.returncode))
+            return False
+    except FileNotFoundError:
+        iptablesAvailable = False
+        LogData('iptables not found at /sbin/iptables')
+        return False
+    except subprocess.TimeoutExpired:
+        iptablesAvailable = False
+        LogData('iptables check timed out')
+        return False
+    except Exception as e:
+        iptablesAvailable = False
+        LogData('Error checking iptables: '+str(e))
+        return False
+
+
+#######################
 def SaveIPTables():
-    subprocess.call(['/sbin/iptables-save'])
+    global iptablesAvailable
+    if not iptablesAvailable:
+        LogData('SaveIPTables skipped: iptables not available')
+        return
+    try:
+        subprocess.call(['/sbin/iptables-save'])
+    except Exception as e:
+        LogData('Error saving iptables: '+str(e))
 
 
 #######################
@@ -286,19 +328,25 @@ def BlockIP(ip, reason=''):
     #the part that actually blocks the IP by sending details to iptables
     global debugmode
     global aActiveBlocklist
+    global iptablesAvailable
 
     #check if already blocked
     if ip in aActiveBlocklist:
         LogData('already blocked: '+ip)
         return
     else:
+        aActiveBlocklist.append(ip)
         if not debugmode:
-            aActiveBlocklist.append(ip)
-            LogData('Passing to IPTables ->'+ip+' reason: '+reason)
-            subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
-            #subprocess.call(['/sbin/iptables-save']) #has to save because no clean exit, update, now done in CloseGracefully()
+            if iptablesAvailable:
+                LogData('Passing to IPTables ->'+ip+' reason: '+reason)
+                try:
+                    subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
+                except Exception as e:
+                    LogData('Error blocking IP '+ip+': '+str(e))
+                    aActiveBlocklist.remove(ip)  #remove from list if blocking failed
+            else:
+                LogData('NOT blocking IP '+ip+' - iptables not available: '+reason)
         else:
-            aActiveBlocklist.append(ip)
             LogData("ADD/debug mode: iptables -I INPUT -s "+ip+" -j DROP")
 
 
@@ -442,11 +490,18 @@ def ReverseDateTime(authstring):
 #######################
 def ClearIPTables():
     #clear all iptables rules
+    global iptablesAvailable
     if not debugmode:
-        LogData('clearing iptables')
-        subprocess.call(['/sbin/iptables', '-F'])
-        subprocess.call(['/sbin/iptables-save'])
-        LogData('done')
+        if iptablesAvailable:
+            LogData('clearing iptables')
+            try:
+                subprocess.call(['/sbin/iptables', '-F'])
+                subprocess.call(['/sbin/iptables-save'])
+                LogData('done')
+            except Exception as e:
+                LogData('Error clearing iptables: '+str(e))
+        else:
+            LogData('Skipping iptables clear - iptables not available')
     else:
         LogData("CLEAR/debug mode: iptables -F")
 
@@ -552,10 +607,20 @@ def SaveBlockList():
     global BlockFileName
 
     LogData('saving blocklist')
-    with open(BlockFileName, "wb") as fblockfile:
-        pickle.dump(aBlocklist, fblockfile)
-        fblockfile.flush()
-    #fblockfile.close() not required with 'with'
+    try:
+        with open(BlockFileName, "wb") as fblockfile:
+            pickle.dump(aBlocklist, fblockfile)
+            fblockfile.flush()
+        #fblockfile.close() not required with 'with'
+    except PermissionError:
+        LogData('ERROR: Permission denied writing to blocklist file: '+BlockFileName)
+        CloseGracefully(exitcode=17)
+    except OSError as e:
+        LogData('ERROR: OS error writing to blocklist file: '+str(e))
+        CloseGracefully(exitcode=17)
+    except Exception as e:
+        LogData('ERROR: Unexpected error writing to blocklist file: '+str(e))
+        CloseGracefully(exitcode=17)
 
 
 #######################
@@ -1097,6 +1162,9 @@ def main():
         flushcount = 10
 
     time.sleep(3)
+    CheckIPTablesInstalled()
+    if not iptablesAvailable:
+        LogData('WARNING: iptables not available - IP blocking disabled, but monitoring will continue')
     ClearIPTables()
     OpenBlockList()
     PrintBlockList()
