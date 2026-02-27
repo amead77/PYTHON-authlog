@@ -589,12 +589,28 @@ class AuthLogger2:
             return tmp[-3], '', '(auth.log) ' + line[16:]
         if 'banner exchange' in line and 'invalid format' in line:
             return tmp[-5], '', '(auth.log) ' + line[16:]
-        if 'Unable to negotiate' in line and 'diffie-hellman-group-exchange-sha1' in line:
-            return tmp[9], '', '(auth.log) ' + line[16:]
+        if 'Unable to negotiate' in line and 'with ' in line and ' port ' in line:
+            words = line.split()
+            try:
+                with_idx = words.index('with')
+                if with_idx + 1 < len(words):
+                    return words[with_idx + 1], '', '(auth.log) ' + line[16:]
+            except ValueError:
+                pass
         if '(sshd:auth): authentication failure;' in line:
-            if ' user=' in line:
-                return tmp[-3], tmp[-1], '(auth.log) ' + line[16:]
-            return tmp[-1], 'none', '(auth.log) ' + line[16:]
+            words = line.split()
+            found_ip = ''
+            found_user = 'none'
+            for word in words:
+                if word.startswith('rhost='):
+                    found_ip = word.split('=', 1)[1]
+                elif word.startswith('user='):
+                    candidate_user = word.split('=', 1)[1]
+                    if candidate_user != '':
+                        found_user = candidate_user
+            if found_ip != '':
+                return found_ip, found_user, '(auth.log) ' + line[16:]
+            return None
         return None
 
     def parse_vnc_line(self, line: str):
