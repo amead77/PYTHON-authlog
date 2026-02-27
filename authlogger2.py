@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r04"
+version = "v2.1-2026/02/27r07"
 
 
 @dataclass
@@ -709,6 +709,50 @@ class AuthLogger2:
         source.handle.seek(source.pos)
         self.log(f'opened stream: {source.path} pos={source.pos}')
 
+    def backfill_source_history(self, source: SourceFile):
+        if not source.enabled:
+            return 0, 0, 0
+
+        total_lines = 0
+        matched_events = 0
+        imported_events = 0
+        try:
+            with open(source.path, 'r', encoding='utf-8', errors='replace') as fh:
+                for line in fh:
+                    total_lines += 1
+                    line = line.rstrip('\n')
+                    if self.parse_line(source.name, line):
+                        matched_events += 1
+                    if self.process_line(source, line):
+                        imported_events += 1
+        except Exception as exc:
+            self.log(f'backfill error on {source.path}: {exc}')
+        return total_lines, matched_events, imported_events
+
+    def backfill_existing_logs_if_dry_run(self):
+        if not self.dry_run:
+            return
+
+        self.log('Dry-run startup backfill enabled: scanning existing log contents from beginning')
+        total_lines = 0
+        total_matches = 0
+        total_events = 0
+        for source in (self.auth, self.kern, self.vnc):
+            lines, matches, events = self.backfill_source_history(source)
+            total_lines += lines
+            total_matches += matches
+            total_events += events
+            if source.enabled:
+                self.log(
+                    f'backfill summary [{source.name}]: '
+                    f'lines={lines}, matched_events={matches}, imported_events={events}'
+                )
+
+        self.log(
+            f'backfill complete: lines={total_lines}, '
+            f'matched_events={total_matches}, imported_events={total_events}'
+        )
+
     def close_source(self, source: SourceFile):
         if source.handle is not None:
             try:
@@ -835,6 +879,7 @@ class AuthLogger2:
             self.log('No log sources available. Exiting.')
             self.close_gracefully(exitcode=10)
 
+        self.backfill_existing_logs_if_dry_run()
         self.startup_reapply_blocks()
         self.commit_state_if_needed()
 
