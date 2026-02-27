@@ -82,7 +82,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2026/02/27r06"
+version = "v1.0-2026/02/27r07"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -773,6 +773,7 @@ def SaveSettings():
     global restart_time
     global aAutoBlockUsers
     global sAutoBlockUsers
+    global KernFileName
 
     #if not inifile exists, create it
     if not os.path.isfile(iniFileName):
@@ -784,6 +785,7 @@ def SaveSettings():
             'localip': localip,
             'blockfile': BlockFileName,
             'authfile': AuthFileName,
+            'kernfile': KernFileName,
             'failcount': failcount,
             'vncfile': vncFileName,
             'restart_time': restart_time,
