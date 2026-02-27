@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SESSION_NAME="authlog2"
-PYTHON_SCRIPT="sudo python3 ~/Documents/Programming/PYTHON-authlog/authlogger2.py"
+PYTHON_SCRIPT="sudo python3 /home/adam/bin/authlogger/authlogger2.py"
 
 while :; do
     if ! tmux has-session -t $SESSION_NAME 2>/dev/null; then
