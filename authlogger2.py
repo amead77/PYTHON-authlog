@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r15"
+version = "v2.1-2026/02/27r18"
 
 
 @dataclass
@@ -61,6 +61,9 @@ class AuthLogger2:
         self.log_handle = None
         self.log_dirty = False
         self.log_rotate_bytes = 10 * 1024 * 1024
+        self.log_buffer = {}
+        self.log_buffer_interval_seconds = 1.0
+        self.log_buffer_last_flush = time.monotonic()
 
         self.db_path = os.path.join(self.start_dir, 'authlogger2_state.sqlite3')
         self.db = None
@@ -100,7 +103,9 @@ class AuthLogger2:
     def now_str(self) -> str:
         return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 
-    def log(self, message: str):
+    def _emit_log_line(self, message: str, repeat_count: int = 1):
+        if repeat_count > 1:
+            message = f'{message} [{repeat_count}]'
         line = f"[{self.now_str()}]:{message}"
         print(line)
         if self.logging_enabled and self.log_handle is not None:
@@ -108,7 +113,28 @@ class AuthLogger2:
             self.log_handle.write(line + '\n')
             self.log_dirty = True
 
+    def flush_log_buffer_if_due(self, force: bool = False):
+        now = time.monotonic()
+        if not force and (now - self.log_buffer_last_flush) < self.log_buffer_interval_seconds:
+            return
+        if not self.log_buffer:
+            self.log_buffer_last_flush = now
+            return
+
+        for message, count in self.log_buffer.items():
+            self._emit_log_line(message, count)
+        self.log_buffer.clear()
+        self.log_buffer_last_flush = now
+
+    def log(self, message: str):
+        if message in self.log_buffer:
+            self.log_buffer[message] += 1
+        else:
+            self.log_buffer[message] = 1
+        self.flush_log_buffer_if_due(force=False)
+
     def flush_log(self):
+        self.flush_log_buffer_if_due(force=True)
         if self.logging_enabled and self.log_handle is not None:
             self.log_handle.flush()
             self.log_dirty = False
