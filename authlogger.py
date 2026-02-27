@@ -82,7 +82,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2026/02/27r03"
+version = "v1.0-2026/02/27r06"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -866,6 +866,7 @@ def LoadSettings():
     global debugmode
     global sAutoBlockUsers
     global KernFileName
+    global KernExists
 
     LogData('loading settings')
     rt = False
@@ -885,6 +886,7 @@ def LoadSettings():
         BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = StartDir+slash+'auth.log'
         vncFileName = StartDir+slash+'vncserver-x11.log'
+        KernFileName = StartDir+slash+'kern.log'
         #sAutoBlockUsers = 'root,pi'
         #SplitAutoBlockUsers(sAutoBlockUsers)
 
@@ -897,6 +899,7 @@ def LoadSettings():
             localip = config.get('Settings','localip', fallback='192.168.')
             if not debugmode: BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
             if not debugmode: AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
+            if not debugmode: KernFileName = config.get('Settings', 'kernfile', fallback = '/var/log/kern.log')
             fc = config.get('Settings','failcount', fallback= '2')
             restart_time = config.get('Settings','restart_time', fallback= 'None')
             try:
@@ -926,12 +929,14 @@ def LoadSettings():
 
     authExists = True if (os.path.isfile(AuthFileName)) else False
     vncExists = True if (os.path.isfile(vncFileName)) else False
+    KernExists = True if (os.path.isfile(KernFileName)) else False
 
     LogData(f"localip(ini): {localip}")
     SplitLocalIP(localip)
     LogData(f"blockfile: {BlockFileName}")
     if authExists: LogData(f"authfile: {AuthFileName}")
     if vncExists: LogData(f"vncfile: {vncFileName}")
+    if KernExists: LogData(f"kernfile: {KernFileName}")
     LogData(f"failcount: {failcount}")
     LogData(f"restart_time: {restart_time}")
 
