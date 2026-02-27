@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r18"
+version = "v2.1-2026/02/27r20"
 
 
 @dataclass
@@ -986,6 +986,10 @@ class AuthLogger2:
     def run_loop(self):
         while True:
             try:
+                # Keep buffered log output cadence near configured interval,
+                # even when no new log messages are emitted.
+                self.flush_log_buffer_if_due(force=False)
+
                 self.tick_flush += 1
                 if self.tick_flush >= self.flush_every_ticks:
                     self.tick_flush = 0
