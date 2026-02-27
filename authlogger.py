@@ -82,7 +82,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2026/02/27r01"
+version = "v1.0-2026/02/27r03"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -865,6 +865,7 @@ def LoadSettings():
     global restart_time
     global debugmode
     global sAutoBlockUsers
+    global KernFileName
 
     LogData('loading settings')
     rt = False
@@ -878,6 +879,8 @@ def LoadSettings():
         BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = '/var/log/auth.log'
         vncFileName = '/var/log/vncserver-x11.log'
+        KernFileName = '/var/log/kern.log'
+
     else:
         BlockFileName = StartDir+slash+'blocklist.dat'
         AuthFileName = StartDir+slash+'auth.log'
@@ -1098,7 +1101,15 @@ def main():
     global AuthLogInode
     global VNCLogInode
     global newlogdata
+    global KernFileName
+    global KernPos
+    global KernFileHanle
+    global KernExists
+    global KernLogInode
 
+    KernPos = 0
+    KernLogInode = None
+    KernBlocks = False
     newlogdata = False
     AuthPos = 0
     VNCPos = 0
