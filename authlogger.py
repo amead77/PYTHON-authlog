@@ -82,7 +82,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2026/02/27r07"
+version = "v1.0-2026/02/27r08"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -479,7 +479,7 @@ def ClearIPTables():
 def ScanAndCompare(aline, authtype):
     global authstrings
     global blocklist
-    global localip
+    global LocalIP
     global failcount
     global aIgnoreIPs
     #global AuthPos
@@ -489,7 +489,7 @@ def ScanAndCompare(aline, authtype):
     #check if aline is in the array of aIgnoreIPs
     
     if not CheckLocalIP(aline):
-    #if aline.find(localip) < 0: #don't do anything if it's the local ip
+    #if aline.find(LocalIP) < 0: #don't do anything if it's the local ip
         match authtype:
             case 'auth.log':
                 tmp = aline.split(' ') #split the line into an array
@@ -617,6 +617,27 @@ def OpenAuthAsStream():
     global AuthFileHandle
     global authExists
     global AuthLogInode
+
+    AuthPos = 0
+    try:
+        LogData('opening '+AuthFileName)
+        AuthFileHandle = open(AuthFileName, 'r')
+        AuthLogInode = get_file_inode(AuthFileName)
+        authExists = True
+    except Exception as e:
+        authExists = False
+        print('Exception: ', e)
+        LogData(AuthFileName+' error while loading, exception: '+str(e))
+
+
+#######################
+def OpenKernAsStream():
+    #opens the auth.log file as a stream
+    global KernFileName
+    global KernPos
+    global KernFileHandle
+    global KernExists
+    global KernLogInode
 
     AuthPos = 0
     try:
@@ -765,7 +786,7 @@ def CheckVNCLog():
 #######################
 def SaveSettings():
     #save last settings to settings.ini
-    global localip
+    global LocalIP
     global BlockFileName
     global AuthFileName
     global failcount
@@ -782,7 +803,7 @@ def SaveSettings():
         config = configparser.ConfigParser()
         # Set some example settings
         config['Settings'] = {
-            'localip': localip,
+            'LocalIP': LocalIP,
             'blockfile': BlockFileName,
             'authfile': AuthFileName,
             'kernfile': KernFileName,
@@ -856,7 +877,7 @@ def SplitAutoBlockUsers(userList):
 #######################
 def LoadSettings():
     # Load the settings from the INI file at startup, this will override the defaults, but not user set vars
-    global localip
+    global LocalIP
     global BlockFileName
     global AuthFileName
     global failcount
@@ -874,7 +895,7 @@ def LoadSettings():
     rt = False
 
     #set some defaults, ini will override
-    localip = '192.168.'
+    LocalIP = '192.168.'
     failcount = 2
     restart_time = 'None' #'00:10:10'
     rt = True
@@ -898,7 +919,7 @@ def LoadSettings():
         try:
             config.read(iniFileName)
             # Access the settings
-            localip = config.get('Settings','localip', fallback='192.168.')
+            LocalIP = config.get('Settings','LocalIP', fallback='192.168.')
             if not debugmode: BlockFileName = config.get('Settings', 'blockfile', fallback = StartDir+slash+'blocklist.dat')
             if not debugmode: AuthFileName = config.get('Settings', 'authfile', fallback = '/var/log/auth.log')
             if not debugmode: KernFileName = config.get('Settings', 'kernfile', fallback = '/var/log/kern.log')
@@ -921,7 +942,7 @@ def LoadSettings():
         SplitAutoBlockUsers(sAutoBlockUsers)
     #else:
     #    LogData('settings.ini not found, using defaults:')
-    #    localip = '192.168.'
+    #    LocalIP = '192.168.'
     #    BlockFileName = StartDir+slash+'blocklist.dat'
     #    AuthFileName = '/var/log/auth.log'
     #    failcount = 2
@@ -933,8 +954,8 @@ def LoadSettings():
     vncExists = True if (os.path.isfile(vncFileName)) else False
     KernExists = True if (os.path.isfile(KernFileName)) else False
 
-    LogData(f"localip(ini): {localip}")
-    SplitLocalIP(localip)
+    LogData(f"LocalIP(ini): {LocalIP}")
+    SplitLocalIP(LocalIP)
     LogData(f"blockfile: {BlockFileName}")
     if authExists: LogData(f"authfile: {AuthFileName}")
     if vncExists: LogData(f"vncfile: {vncFileName}")
@@ -1110,7 +1131,7 @@ def main():
     global newlogdata
     global KernFileName
     global KernPos
-    global KernFileHanle
+    #global KernFileHandle
     global KernExists
     global KernLogInode
 
