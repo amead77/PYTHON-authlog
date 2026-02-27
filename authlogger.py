@@ -82,7 +82,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2026/02/27r08"
+version = "v1.0-2026/02/27r13"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -275,12 +275,15 @@ def CloseGracefully(signal=None, frame=None, exitcode=0):
     LogData('closing...')
     global aBlocklist
     global AuthFileHandle
+    global KernFileHandle
     global vncExists
     global authExists
+    global KernExists
     #AuthFileHandle.close() #not requred, as with statement closes it automatically
     LogData('closing streams')
     #if vncExists and (exitcode != 10): vncFileHandle.close()
     if authExists and (exitcode != 10): AuthFileHandle.close()
+    if KernExists and (exitcode != 10): KernFileHandle.close()
     SaveBlockList()
     SaveSettings()
     CloseLogFile()
@@ -427,6 +430,14 @@ def GetDateTime(authstring, authtype):
                 print('error: '+authstring+'--'+authtype)
                 timey = "20000101000000"
 
+        case 'kern.log':
+            try:
+                dt_str = authstring.split()[0]
+                dt_obj = datetime.datetime.fromisoformat(dt_str.split('+')[0])
+                timey = dt_obj.strftime('%Y%m%d%H%M%S')
+            except:
+                timey = "20000101000000"
+
     return timey
 
 
@@ -486,62 +497,73 @@ def ScanAndCompare(aline, authtype):
     DateString = ''
     newblock = False
     username = ''
-    #check if aline is in the array of aIgnoreIPs
-    
-    if not CheckLocalIP(aline):
-    #if aline.find(LocalIP) < 0: #don't do anything if it's the local ip
-        match authtype:
-            case 'auth.log':
-                tmp = aline.split(' ') #split the line into an array
+    checkIP = ''
 
-                if aline.find(': Failed password for invalid user') >= 0:
-                    newblock = True
-                    checkIP = tmp[len(tmp)-4]
-                    username = tmp[len(tmp)-6]
+    match authtype:
+        case 'auth.log':
+            tmp = aline.split(' ') #split the line into an array
 
-                elif aline.find(': Failed password for') >= 0:
-                    newblock = True
-                    checkIP = tmp[len(tmp)-4]
-                    username = tmp[len(tmp)-6]
-                
-                elif aline.find('Did not receive identification') >= 0:
-                    newblock = True
+            if aline.find(': Failed password for invalid user') >= 0:
+                newblock = True
+                checkIP = tmp[len(tmp)-4]
+                username = tmp[len(tmp)-6]
+
+            elif aline.find(': Failed password for') >= 0:
+                newblock = True
+                checkIP = tmp[len(tmp)-4]
+                username = tmp[len(tmp)-6]
+            
+            elif aline.find('Did not receive identification') >= 0:
+                newblock = True
+                checkIP = tmp[len(tmp)-3]
+
+            elif (aline.find('banner exchange') >= 0) and (aline.find('invalid format',) >= 0):
+                newblock = True
+                checkIP = tmp[len(tmp)-5]
+
+            elif (aline.find('Unable to negotiate') >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
+                newblock = True
+                checkIP = tmp[9]
+
+            elif (aline.find('(sshd:auth): authentication failure;') >= 0):
+                newblock = True
+                if aline.find(' user=') >= 0:
                     checkIP = tmp[len(tmp)-3]
+                    username = tmp[len(tmp)-1]
+                else: 
+                    username = 'none'
+                    checkIP = tmp[len(tmp)-1]
+              
+            if newblock: PassMe = '(auth.log) '+aline[16:]
+            #if newblock: CheckBlocklist(checkIP, DateString, '(auth.log:'+str(AuthPos) +') '+aline[16:])
 
-                elif (aline.find('banner exchange') >= 0) and (aline.find('invalid format',) >= 0):
-                    newblock = True
-                    checkIP = tmp[len(tmp)-5]
+        case 'vncserver-x11.log':
+            if aline.find('[AuthFailure]') >= 0:
+                newblock = True
+                tmp = aline.split(' ')
+                checkIP = tmp[6]
+                checkIP = checkIP.split('::')[0]
+            
+            if newblock: PassMe = '(vncserver-x11.log) '+aline[30:]
+            #if newblock: CheckBlocklist(checkIP, DateString, '(vncserver-x11.log:'+str(AuthPos) +') '+aline[30:])
 
-                elif (aline.find('Unable to negotiate') >= 0) and (aline.find('diffie-hellman-group-exchange-sha1',) >= 0):
-                    newblock = True
-                    checkIP = tmp[9]
+        case 'kern.log':
+            if (aline.find('PORT_SCAN_DETECTED:') >= 0) and (aline.find(' SRC=') >= 0):
+                newblock = True
+                tmp = aline.split(' ')
+                for token in tmp:
+                    if token.startswith('SRC='):
+                        checkIP = token.split('=', 1)[1]
+                        break
+            if newblock: PassMe = '(kern.log) '+aline
 
-                elif (aline.find('(sshd:auth): authentication failure;') >= 0):
-                    newblock = True
-                    if aline.find(' user=') >= 0:
-                        checkIP = tmp[len(tmp)-3]
-                        username = tmp[len(tmp)-1]
-                    else: 
-                        username = 'none'
-                        checkIP = tmp[len(tmp)-1]
-                  
-                if newblock: PassMe = '(auth.log) '+aline[16:]
-                #if newblock: CheckBlocklist(checkIP, DateString, '(auth.log:'+str(AuthPos) +') '+aline[16:])
-
-            case 'vncserver-x11.log':
-                if aline.find('[AuthFailure]') >= 0:
-                    newblock = True
-                    tmp = aline.split(' ')
-                    checkIP = tmp[6]
-                    checkIP = checkIP.split('::')[0]
-                
-                if newblock: PassMe = '(vncserver-x11.log) '+aline[30:]
-                #if newblock: CheckBlocklist(checkIP, DateString, '(vncserver-x11.log:'+str(AuthPos) +') '+aline[30:])
-        if newblock:
-            DateString = GetDateTime(aline, authtype)
-            newblock = CheckBlocklist(checkIP, DateString, PassMe, user=username)
-            if debugmode:
-                if newblock: print("SAC-newblock")
+    if newblock and not CheckLocalIP(checkIP):
+        DateString = GetDateTime(aline, authtype)
+        newblock = CheckBlocklist(checkIP, DateString, PassMe, user=username)
+        if debugmode:
+            if newblock: print("SAC-newblock")
+    elif newblock and debugmode:
+        print('SAC-local-exempt: '+checkIP)
     return newblock
 
 #######################
@@ -632,23 +654,23 @@ def OpenAuthAsStream():
 
 #######################
 def OpenKernAsStream():
-    #opens the auth.log file as a stream
+    #opens the kern.log file as a stream
     global KernFileName
     global KernPos
     global KernFileHandle
     global KernExists
     global KernLogInode
 
-    AuthPos = 0
+    KernPos = 0
     try:
-        LogData('opening '+AuthFileName)
-        AuthFileHandle = open(AuthFileName, 'r')
-        AuthLogInode = get_file_inode(AuthFileName)
-        authExists = True
+        LogData('opening '+KernFileName)
+        KernFileHandle = open(KernFileName, 'r')
+        KernLogInode = get_file_inode(KernFileName)
+        KernExists = True
     except Exception as e:
-        authExists = False
+        KernExists = False
         print('Exception: ', e)
-        LogData(AuthFileName+' error while loading, exception: '+str(e))
+        LogData(KernFileName+' error while loading, exception: '+str(e))
 
 
 #######################
@@ -707,6 +729,24 @@ def CloseVNCStream():
         except Exception as e:
             print('Exception: ', e)
             LogData(vncFileName+' error while closing')
+
+
+#######################
+def CloseKernStream():
+    #closes the kern.log file stream
+    global KernFileName
+    global KernPos
+    global KernFileHandle
+    global KernExists
+
+    if KernExists:
+        try:
+            KernExists = False
+            LogData('closing '+KernFileName)
+            KernFileHandle.close()
+        except Exception as e:
+            print('Exception: ', e)
+            LogData(KernFileName+' error while closing')
 
 
 #######################
@@ -780,6 +820,30 @@ def CheckVNCLog():
     #    VNCPos = 0
     #    vncFileHandle.close()
     #    OpenVNCAsStream()
+    return BlockStatus
+
+
+#######################
+def CheckKernLog():
+    #checks if kern.log updated, if so read in and check for port scan detections
+    global KernFileName
+    global KernFileHandle
+    global KernPos
+    global KernExists
+    NewBlocks = False
+    BlockStatus = False
+
+    kernlogsize = os.stat(KernFileName).st_size
+    if kernlogsize > KernPos:
+        KernFileHandle.seek(KernPos)
+        new_data = KernFileHandle.read()
+
+        lines = new_data.split('\n')
+        for line in lines:
+            NewBlocks = ScanAndCompare(line, 'kern.log')
+            if NewBlocks: BlockStatus = True
+
+        KernPos = kernlogsize
     return BlockStatus
 
 
@@ -1050,7 +1114,7 @@ def get_file_inode(file_path):
         stat_info = os.stat(file_path)
         return stat_info.st_ino
     except FileNotFoundError:
-        return None, None
+        return None
 
 
 #######################
@@ -1079,6 +1143,9 @@ def ReOpenLogFilesAsStream(which):
         case 'vnc':
             CloseVNCStream()
             OpenVNCAsStream()
+        case 'kern':
+            CloseKernStream()
+            OpenKernAsStream()
         case _:
             LogData('error: ReOpenLogFilesAsStream(), unknown which: '+which)
 
@@ -1167,6 +1234,7 @@ def main():
     if debugmode:
         print("A+") if (os.path.isfile(AuthFileName)) else print("A-")
         print("V+") if (os.path.isfile(vncFileName)) else print("V-")
+        print("K+") if (os.path.isfile(KernFileName)) else print("K-")
         flushcount = 10
 
     time.sleep(3)
@@ -1181,8 +1249,9 @@ def main():
     LogData('opening logfiles as stream')
 
     #if not orr(authExists, vncExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
-    if not authExists: CloseGracefully(10) #if neither file exists, exit, why else are we running?
+    if not (authExists or KernExists): CloseGracefully(10) #if neither file exists, exit, why else are we running?
     if authExists: OpenAuthAsStream()
+    if KernExists: OpenKernAsStream()
     #if vncExists: OpenVNCAsStream()
    
     while True:
@@ -1200,15 +1269,17 @@ def main():
             runnow = 0
             AmAlive()
             
-            if is_log_rotated(AuthLogInode, AuthFileName): ReOpenLogFilesAsStream('auth')
+            if authExists and is_log_rotated(AuthLogInode, AuthFileName): ReOpenLogFilesAsStream('auth')
+            if KernExists and is_log_rotated(KernLogInode, KernFileName): ReOpenLogFilesAsStream('kern')
             
             #if is_log_rotated(VNCLogInode, vncFileName): ReOpenLogFilesAsStream('vnc')
 
             if authExists: authBlocks = CheckAuthLog()
+            if KernExists: KernBlocks = CheckKernLog()
             #if vncExists: vncBlocks = CheckVNCLog()
-            if authBlocks or vncBlocks: BlockStatus = True
+            if authBlocks or vncBlocks or KernBlocks: BlockStatus = True
             #if not (authExists and vncExists): CloseGracefully(10) #because a log cycle could cause one to not exist
-            if not authExists: CloseGracefully(10) #because a log cycle could cause one to not exist
+            if not (authExists or KernExists): CloseGracefully(10) #because a log cycle could cause one to not exist
 
         time.sleep(0.25) #only cycle 4hz
     #<--while True:
