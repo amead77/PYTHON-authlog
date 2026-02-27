@@ -1,3 +1,7 @@
+# Authlogger 1 was 99% written by me. This version is based on v1.0-2026/02/27r13 but is a near complete 
+# rewrite with a new codebase and architecture. The prior version is available as authlogger.py for reference,
+# but authlogger2.py should be considered a new program with the same general purpose and some shared concepts,
+# rather than a direct edit of the prior code. I let GPT-5.3 go mad on this version.
 import argparse
 import configparser
 import datetime
@@ -31,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r01"
+version = "v2.1-2026/02/27r03"
 
 
 @dataclass
