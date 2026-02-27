@@ -10,12 +10,26 @@ import sys
 import time
 from typing import Optional
 
+"""
+authlogger2.py - Cleaner reimplementation of authlogger.py
+
+Differences from authlogger.py:
+1) Uses a single controller class (`AuthLogger2`) instead of many globals.
+2) Groups related behavior into focused methods (settings, parsing, streams, loop).
+3) Keeps active feature parity: auth/kern(/vnc) scanning, inode rotation reopen,
+   blocklist persistence, iptables blocking, local-IP exemptions, restart timing.
+4) Preserves existing exit codes and graceful shutdown behavior.
+5) Adds safer blocklist normalization when loading pickled legacy objects.
+6) Keeps output style/log semantics close to original for operational familiarity.
+"""
+
 
 debugmode = False
 version = "v2.0-2026/02/27r0"
 
 
 class cBlock:
+    """Per-IP event container kept compatible with authlogger.py pickle format."""
     def __init__(self, vDT=None, ip=None, vReason=None, vUsername=None):
         self.aDateTime = []
         self.ip = ip
@@ -33,38 +47,51 @@ class cBlock:
 
 
 class AuthLogger2:
+    """Main runtime controller for log monitoring, blocking, and persistence."""
+
+    ############################
+    # Lifecycle and setup
+    ############################
     def __init__(self):
+        # Platform/runtime basics.
         self.debugmode = False
         self.slash = '/'
         self.start_dir = os.getcwd().removesuffix(self.slash)
 
+        # App logging state.
         self.logging_enabled = True
         self.log_file_name = ''
         self.log_file_handle = None
         self.new_log_data = False
 
+        # Config and source paths.
         self.ini_file_name = ''
         self.block_file_name = ''
         self.auth_file_name = ''
         self.vnc_file_name = ''
         self.kern_file_name = ''
 
+        # Source availability flags.
         self.auth_exists = False
         self.vnc_exists = False
         self.kern_exists = False
 
+        # Open file stream handles.
         self.auth_file_handle = None
         self.vnc_file_handle = None
         self.kern_file_handle = None
 
+        # Tail offsets for each monitored file.
         self.auth_pos = 0
         self.vnc_pos = 0
         self.kern_pos = 0
 
+        # Inodes used for rotation detection.
         self.auth_inode = None
         self.vnc_inode = None
         self.kern_inode = None
 
+        # Rule and filtering settings.
         self.failcount = 2
         self.restart_time = 'None'
         self.local_ip = '192.168.'
@@ -75,30 +102,36 @@ class AuthLogger2:
         self.aBlocklist = []
         self.aActiveBlocklist = []
 
+        # Firewall capability state.
         self.iptables_available = False
         self.last_checkin_hour = ''
 
+        # Loop pacing counters.
         self.flush_count = 80
         self.flush_tick = 0
         self.run_tick = 0
         self.run_every = 4
 
+        # Per-source change indicators.
         self.auth_blocks = False
         self.vnc_blocks = False
         self.kern_blocks = False
         self.block_status = False
 
     def clear_screen(self):
+        """Clear terminal output for interactive startup readability."""
         if os.name == 'nt':
             os.system('cls')
         else:
             os.system('clear')
 
     def help(self):
+        """Print fallback help text used by error exits."""
         print("**something went wrong. I don't know what, it probably means a file didn't exist or you ran as a normie rather than root\n")
         print("Remember: must run as sudo/root or it cannot block IPs\n")
 
     def error_arg(self, err: int):
+        """Emit error message mapped to exit code and terminate process."""
         match err:
             case 0:
                 print("bye!")
@@ -142,21 +175,25 @@ class AuthLogger2:
         sys.exit(err)
 
     def check_is_linux(self):
+        """Enable debug mode automatically when not running on Linux."""
         if not sys.platform.startswith('linux'):
             self.slash = '\\'
             self.debugmode = True
             print("not running on linux, debug mode enabled")
 
     def welcome(self):
+        """Print startup banner and version text."""
         print('\n[==-- Wheel reinvention society presents: authlogger2! --==]\n')
         print('Does what authlogger does, but cleaner.\n')
         print("To EXIT use CTRL-C.")
         print('version: ' + version)
 
     def timestamp(self) -> str:
+        """Return local timestamp string for log messages."""
         return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
 
     def log_data(self, message: str):
+        """Write message to console and optionally to file log."""
         print(f"[{self.timestamp()}]:{message}")
         if self.logging_enabled and self.log_file_handle is not None:
             self.check_log_size()
@@ -164,6 +201,7 @@ class AuthLogger2:
             self.new_log_data = True
 
     def flush_log_file(self):
+        """Flush pending log file buffer when logging is enabled."""
         if not self.logging_enabled:
             return
         if self.log_file_handle is not None:
@@ -171,6 +209,7 @@ class AuthLogger2:
             self.new_log_data = False
 
     def close_log_file(self):
+        """Close logger output file after writing stop marker."""
         if not self.logging_enabled:
             return
         if self.log_file_handle is None:
@@ -181,6 +220,7 @@ class AuthLogger2:
         self.log_file_handle = None
 
     def open_log_file(self):
+        """Open app log file, creating logs directory when needed."""
         if not self.logging_enabled:
             print('-- logging to file is off --')
             return
@@ -205,6 +245,7 @@ class AuthLogger2:
         self.log_data('authlogger2 started. Version: ' + version)
 
     def check_log_size(self):
+        """Rotate app log at 10MB using .old and .old.1 backups."""
         if not self.logging_enabled:
             return
         if not self.log_file_name:
@@ -227,6 +268,7 @@ class AuthLogger2:
                 self.open_log_file()
 
     def get_args(self):
+        """Parse CLI options and load configuration."""
         self.log_data('getting args')
         parser = argparse.ArgumentParser()
         parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
@@ -237,22 +279,29 @@ class AuthLogger2:
         if not self.load_settings():
             self.error_arg(8)
 
+    ############################
+    # Settings and policy lists
+    ############################
     def split_local_ip(self, ip_list: str):
+        """Parse comma-separated local IP/prefix exemptions."""
         self.aIgnoreIPs = [x.strip() for x in ip_list.split(',') if x.strip()]
         self.log_data('local IP list: ' + str(self.aIgnoreIPs))
 
     def split_auto_block_users(self, user_list: str):
+        """Parse comma-separated usernames that force immediate blocking."""
         user_list = user_list.upper()
         self.log_data('autoblock users: ' + str(user_list))
         self.aAutoBlockUsers = [x.strip() for x in user_list.split(',') if x.strip()]
 
     def check_local_ip(self, check_string: str) -> bool:
+        """Return True if value matches any local exemption substring."""
         for item in self.aIgnoreIPs:
             if item in check_string:
                 return True
         return False
 
     def check_auto_block_users(self, username: str) -> bool:
+        """Return True when username is in configured auto-block list."""
         username = (username or '').strip().upper()
         if username == '':
             return False
@@ -266,6 +315,7 @@ class AuthLogger2:
         return False
 
     def load_settings(self) -> bool:
+        """Load defaults and apply overrides from settings.ini when present."""
         self.log_data('loading settings')
 
         self.local_ip = '192.168.'
@@ -329,6 +379,7 @@ class AuthLogger2:
         return loaded_ok
 
     def save_settings(self):
+        """Create settings.ini if absent (preserves original behavior)."""
         if os.path.isfile(self.ini_file_name):
             return
 
@@ -351,7 +402,11 @@ class AuthLogger2:
             print('Exception: ', e)
             self.log_data('error saving settings.ini')
 
+    ############################
+    # Firewall interaction
+    ############################
     def check_iptables_installed(self) -> bool:
+        """Detect iptables availability; allow monitor-only fallback mode."""
         try:
             result = subprocess.run(['/sbin/iptables', '--version'], capture_output=True, timeout=1)
             if result.returncode == 0:
@@ -375,6 +430,7 @@ class AuthLogger2:
             return False
 
     def save_iptables(self):
+        """Persist active iptables rules using iptables-save."""
         if not self.iptables_available:
             self.log_data('SaveIPTables skipped: iptables not available')
             return
@@ -384,6 +440,7 @@ class AuthLogger2:
             self.log_data('Error saving iptables: ' + str(e))
 
     def clear_iptables(self):
+        """Flush iptables and install scan-detection LOG rules."""
         if self.debugmode:
             self.log_data('CLEAR/debug mode: iptables -F')
             return
@@ -402,7 +459,11 @@ class AuthLogger2:
         except Exception as e:
             self.log_data('Error clearing iptables: ' + str(e))
 
+    ############################
+    # Blocklist model and decisions
+    ############################
     def is_valid_ip(self, ip: str) -> bool:
+        """Simple IPv4 numeric dotted-quad validation."""
         if ip.count('.') != 3:
             return False
         parts = ip.split('.')
@@ -414,9 +475,11 @@ class AuthLogger2:
         return True
 
     def reverse_datetime(self, dt_string: str) -> str:
+        """Convert internal YYYYMMDDHHMMSS format into readable timestamp."""
         return time.strftime('%Y-%m-%d %H:%M:%S', time.strptime(dt_string, '%Y%m%d%H%M%S'))
 
     def print_blocklist(self):
+        """Log blocklist entries and associated event details."""
         self.log_data('printing blocklist')
         for idx, row in enumerate(self.aBlocklist):
             self.log_data(f"[{idx}] {row.ip}:")
@@ -426,6 +489,7 @@ class AuthLogger2:
                 self.log_data('-->' + self.reverse_datetime(dt) + f" - u=[{username}] reason: {reason}")
 
     def block_ip(self, ip: str, reason: str = ''):
+        """Add firewall DROP rule for IP unless already active or unavailable."""
         if ip in self.aActiveBlocklist:
             self.log_data('already blocked: ' + ip)
             return
@@ -448,6 +512,7 @@ class AuthLogger2:
                 self.aActiveBlocklist.remove(ip)
 
     def check_blocklist(self, ip: str, timeblocked: str, reason: str, user: str = '') -> bool:
+        """Insert event into blocklist and trigger blocking when thresholds match."""
         if not self.is_valid_ip(ip):
             return False
 
@@ -489,7 +554,11 @@ class AuthLogger2:
             print('CBL-foundit')
         return was_new
 
+    ############################
+    # Log parsing and event extraction
+    ############################
     def get_datetime(self, line: str, source: str) -> str:
+        """Parse source-specific timestamps into internal sortable format."""
         try:
             if source in ('auth.log', 'kern.log'):
                 first = line.split()[0]
@@ -510,6 +579,7 @@ class AuthLogger2:
             return '20000101000000'
 
     def parse_auth_line(self, line: str):
+        """Extract IP/user/reason from supported auth.log failure patterns."""
         tmp = line.split(' ')
         if ': Failed password for invalid user' in line:
             return tmp[-4], tmp[-6], '(auth.log) ' + line[16:]
@@ -528,6 +598,7 @@ class AuthLogger2:
         return None
 
     def parse_vnc_line(self, line: str):
+        """Extract IP and reason from VNC auth failure records."""
         if '[AuthFailure]' not in line:
             return None
         tmp = line.split(' ')
@@ -535,6 +606,7 @@ class AuthLogger2:
         return ip, '', '(vncserver-x11.log) ' + line[30:]
 
     def parse_kern_line(self, line: str):
+        """Extract source IP from PORT_SCAN_DETECTED kernel log entries."""
         if 'PORT_SCAN_DETECTED:' not in line or ' SRC=' not in line:
             return None
         for token in line.split(' '):
@@ -543,6 +615,7 @@ class AuthLogger2:
         return None
 
     def scan_and_compare(self, line: str, source: str) -> bool:
+        """Parse line, apply exemptions, and store/block if event is new."""
         parsed = None
         if source == 'auth.log':
             parsed = self.parse_auth_line(line)
@@ -567,6 +640,7 @@ class AuthLogger2:
         return is_new
 
     def save_blocklist(self):
+        """Persist blocklist to blocklist.dat with guarded error handling."""
         self.log_data('saving blocklist')
         try:
             with open(self.block_file_name, 'wb') as fblock:
@@ -583,6 +657,7 @@ class AuthLogger2:
             self.close_gracefully(exitcode=17)
 
     def first_run_check_blocklist(self):
+        """On startup, re-enforce eligible saved blocks in firewall."""
         self.log_data('checking blocklist/first run: ' + str(len(self.aBlocklist)) + ' entries')
         for row in self.aBlocklist:
             if len(row.aDateTime) >= self.failcount:
@@ -594,6 +669,7 @@ class AuthLogger2:
                         break
 
     def open_blocklist(self):
+        """Load blocklist from disk and normalize into cBlock objects."""
         self.log_data('opening blocklist')
         if os.path.isfile(self.block_file_name):
             try:
@@ -611,6 +687,7 @@ class AuthLogger2:
         self.first_run_check_blocklist()
 
     def normalize_loaded_blocklist(self, loaded):
+        """Normalize unpickled data into safe in-memory cBlock instances."""
         result = []
         if not isinstance(loaded, list):
             return result
@@ -634,7 +711,11 @@ class AuthLogger2:
                 continue
         return result
 
+    ############################
+    # Stream and rotation handling
+    ############################
     def get_file_inode(self, file_path: str):
+        """Return file inode for rotation tracking, or None if missing."""
         try:
             stat_info = os.stat(file_path)
             return stat_info.st_ino
@@ -642,6 +723,7 @@ class AuthLogger2:
             return None
 
     def is_log_rotated(self, original_inode, file_path: str) -> bool:
+        """Detect log rotation by inode change."""
         current_inode = self.get_file_inode(file_path)
         if current_inode is None:
             self.log_data('File not found while checking inode: ' + file_path)
@@ -653,6 +735,7 @@ class AuthLogger2:
         return False
 
     def open_auth_stream(self):
+        """Open auth.log stream and initialize tracking state."""
         self.auth_pos = 0
         try:
             self.log_data('opening ' + self.auth_file_name)
@@ -665,6 +748,7 @@ class AuthLogger2:
             self.log_data(self.auth_file_name + ' error while loading, exception: ' + str(e))
 
     def open_vnc_stream(self):
+        """Open vnc log stream and initialize tracking state."""
         self.vnc_pos = 0
         self.vnc_exists = False
         if self.vnc_file_name != '':
@@ -679,6 +763,7 @@ class AuthLogger2:
                 self.log_data(self.vnc_file_name + ' error while loading, exception: ' + str(e))
 
     def open_kern_stream(self):
+        """Open kern.log stream and initialize tracking state."""
         self.kern_pos = 0
         try:
             self.log_data('opening ' + self.kern_file_name)
@@ -691,6 +776,7 @@ class AuthLogger2:
             self.log_data(self.kern_file_name + ' error while loading, exception: ' + str(e))
 
     def close_auth_stream(self):
+        """Close auth stream and mark source unavailable."""
         if self.auth_file_handle is None:
             self.auth_exists = False
             return
@@ -703,6 +789,7 @@ class AuthLogger2:
         self.auth_exists = False
 
     def close_vnc_stream(self):
+        """Close VNC stream and mark source unavailable."""
         if not self.vnc_exists or self.vnc_file_handle is None:
             return
         try:
@@ -714,6 +801,7 @@ class AuthLogger2:
         self.vnc_exists = False
 
     def close_kern_stream(self):
+        """Close kern stream and mark source unavailable."""
         if not self.kern_exists or self.kern_file_handle is None:
             return
         try:
@@ -725,6 +813,7 @@ class AuthLogger2:
         self.kern_exists = False
 
     def reopen_log_stream(self, which: str):
+        """Reopen selected source stream after rotation detection."""
         if which == 'auth':
             self.close_auth_stream()
             self.open_auth_stream()
@@ -739,7 +828,11 @@ class AuthLogger2:
             return
         self.log_data('error: ReOpenLogFilesAsStream(), unknown which: ' + which)
 
+    ############################
+    # Polling checks
+    ############################
     def check_auth_log(self) -> bool:
+        """Process newly appended lines from auth.log."""
         if not self.auth_exists or self.auth_file_handle is None:
             return False
         try:
@@ -759,6 +852,7 @@ class AuthLogger2:
         return block_status
 
     def check_vnc_log(self) -> bool:
+        """Process newly appended lines from vnc log."""
         if not self.vnc_exists or self.vnc_file_handle is None:
             return False
         try:
@@ -778,6 +872,7 @@ class AuthLogger2:
         return block_status
 
     def check_kern_log(self) -> bool:
+        """Process newly appended lines from kern.log."""
         if not self.kern_exists or self.kern_file_handle is None:
             return False
         try:
@@ -796,13 +891,18 @@ class AuthLogger2:
             self.kern_pos = current_size
         return block_status
 
+    ############################
+    # Runtime loop controls
+    ############################
     def am_alive(self):
+        """Emit hourly heartbeat log entry to show process is alive."""
         nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
         if (nowtime[-5:-3] == '00') and (nowtime[-8:-6] != self.last_checkin_hour):
             self.last_checkin_hour = nowtime[-8:-6]
             self.log_data('Checking in, nothing to report')
 
     def check_restart_time(self):
+        """Exit at configured restart time for external restart wrappers."""
         ntime = time.strftime('%H:%M:%S', time.localtime(time.time()))
         if ntime == self.restart_time:
             self.log_data('restarting at ' + ntime)
@@ -812,6 +912,7 @@ class AuthLogger2:
                 print('RESTART/debug mode: restarting at ' + ntime)
 
     def close_gracefully(self, signal_num=None, frame=None, exitcode: Optional[int] = 0):
+        """Central shutdown path: close streams, persist state, exit."""
         self.log_data('closing...')
         self.log_data('closing streams')
 
@@ -833,6 +934,7 @@ class AuthLogger2:
             self.error_arg(exitcode)
 
     def run(self):
+        """Program entry flow: initialize, load, monitor forever."""
         signal.signal(signal.SIGINT, self.close_gracefully)
         signal.signal(signal.SIGTERM, self.close_gracefully)
 
@@ -872,6 +974,7 @@ class AuthLogger2:
         #    self.open_vnc_stream()
 
         while True:
+            # Fast loop: periodic flush work every N ticks.
             self.flush_tick += 1
             if self.flush_tick > self.flush_count:
                 self.flush_tick = 0
@@ -885,6 +988,7 @@ class AuthLogger2:
             self.check_restart_time()
             self.run_tick += 1
             if self.run_tick >= self.run_every:
+                # Slow loop: monitor/reopen/scan every ~1s (0.25 * run_every).
                 self.run_tick = 0
                 self.am_alive()
 
@@ -912,6 +1016,7 @@ class AuthLogger2:
 
 
 def main():
+    """Instantiate and run AuthLogger2."""
     app = AuthLogger2()
     app.run()
 
