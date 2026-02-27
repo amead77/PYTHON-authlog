@@ -2,1037 +2,879 @@ import argparse
 import configparser
 import datetime
 import errno
+import fcntl
+import ipaddress
 import os
-import pickle
+import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
+import traceback
+from dataclasses import dataclass
 from typing import Optional
 
 """
-authlogger2.py - Cleaner reimplementation of authlogger.py
+authlogger2.py - hardened rewrite/replacement for authlogger.py with improved reliability, security, and maintainability.
 
-Differences from authlogger.py:
-1) Uses a single controller class (`AuthLogger2`) instead of many globals.
-2) Groups related behavior into focused methods (settings, parsing, streams, loop).
-3) Keeps active feature parity: auth/kern(/vnc) scanning, inode rotation reopen,
-   blocklist persistence, iptables blocking, local-IP exemptions, restart timing.
-4) Preserves existing exit codes and graceful shutdown behavior.
-5) Adds safer blocklist normalization when loading pickled legacy objects.
-6) Keeps output style/log semantics close to original for operational familiarity.
+Primary improvements over prior versions:
+- Uses SQLite state store instead of pickle (safer persistence model).
+- Strict IP validation via ipaddress module.
+- Single-instance lock file to avoid concurrent monitors.
+- Robust stream tailing with inode + truncation handling.
+- Atomic settings writes to reduce corruption risk.
+- Main loop exception guard with traceback logging.
+- Dry-run mode (`--dry-run`) as the only CLI option.
+- Auto-detects sensible defaults when settings are missing.
 """
+#version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
+#AUTO-V
+version = "v2.1-2026/02/27r01"
 
 
-debugmode = False
-version = "v2.0-2026/02/27r0"
-
-
-class cBlock:
-    """Per-IP event container kept compatible with authlogger.py pickle format."""
-    def __init__(self, vDT=None, ip=None, vReason=None, vUsername=None):
-        self.aDateTime = []
-        self.ip = ip
-        self.aReason = []
-        self.aUsername = []
-
-    def add_datetime(self, vDT):
-        self.aDateTime.append(vDT)
-
-    def add_reason(self, vReason):
-        self.aReason.append(vReason)
-
-    def add_username(self, vUsername):
-        self.aUsername.append(vUsername)
+@dataclass
+class SourceFile:
+    name: str
+    path: str
+    enabled: bool = False
+    handle: Optional[object] = None
+    inode: Optional[int] = None
+    pos: int = 0
 
 
 class AuthLogger2:
-    """Main runtime controller for log monitoring, blocking, and persistence."""
-
-    ############################
-    # Lifecycle and setup
-    ############################
     def __init__(self):
-        # Platform/runtime basics.
+        self.dry_run = False
         self.debugmode = False
-        self.slash = '/'
-        self.start_dir = os.getcwd().removesuffix(self.slash)
+        self.cwd = os.getcwd()
+        self.start_dir = self.cwd.rstrip('/')
+        self.settings_path = os.path.join(self.start_dir, 'settings.ini')
 
-        # App logging state.
         self.logging_enabled = True
-        self.log_file_name = ''
-        self.log_file_handle = None
-        self.new_log_data = False
+        self.log_path = os.path.join(self.start_dir, 'logs', 'authlogger2.log')
+        self.log_handle = None
+        self.log_dirty = False
+        self.log_rotate_bytes = 10 * 1024 * 1024
 
-        # Config and source paths.
-        self.ini_file_name = ''
-        self.block_file_name = ''
-        self.auth_file_name = ''
-        self.vnc_file_name = ''
-        self.kern_file_name = ''
+        self.db_path = os.path.join(self.start_dir, 'authlogger2_state.sqlite3')
+        self.db = None
 
-        # Source availability flags.
-        self.auth_exists = False
-        self.vnc_exists = False
-        self.kern_exists = False
-
-        # Open file stream handles.
-        self.auth_file_handle = None
-        self.vnc_file_handle = None
-        self.kern_file_handle = None
-
-        # Tail offsets for each monitored file.
-        self.auth_pos = 0
-        self.vnc_pos = 0
-        self.kern_pos = 0
-
-        # Inodes used for rotation detection.
-        self.auth_inode = None
-        self.vnc_inode = None
-        self.kern_inode = None
-
-        # Rule and filtering settings.
+        self.local_exemptions = []
+        self.autoblock_users = []
         self.failcount = 2
         self.restart_time = 'None'
-        self.local_ip = '192.168.'
-        self.aIgnoreIPs = []
-        self.sAutoBlockUsers = ''
-        self.aAutoBlockUsers = []
 
-        self.aBlocklist = []
-        self.aActiveBlocklist = []
+        self.flush_every_ticks = 80
+        self.poll_every_ticks = 4
+        self.sleep_seconds = 0.25
 
-        # Firewall capability state.
-        self.iptables_available = False
+        self.tick_flush = 0
+        self.tick_poll = 0
         self.last_checkin_hour = ''
 
-        # Loop pacing counters.
-        self.flush_count = 80
-        self.flush_tick = 0
-        self.run_tick = 0
-        self.run_every = 4
+        self.auth = SourceFile('auth.log', '')
+        self.kern = SourceFile('kern.log', '')
+        self.vnc = SourceFile('vncserver-x11.log', '')
 
-        # Per-source change indicators.
-        self.auth_blocks = False
-        self.vnc_blocks = False
-        self.kern_blocks = False
-        self.block_status = False
+        self.active_blocked_ips = set()
+        self.iptables_cmd = None
+        self.iptables_save_cmd = None
+        self.iptables_available = False
+        self.iptables_chain = 'AUTHLOGGER_INPUT'
+        self.install_scan_rule = True
+
+        self.lock_file_path = os.path.join(self.start_dir, '.authlogger2.lock')
+        self.lock_handle = None
+
+        self.pending_state_write = False
+
+    ############################
+    # Utility / logging
+    ############################
+    def now_str(self) -> str:
+        return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+
+    def log(self, message: str):
+        line = f"[{self.now_str()}]:{message}"
+        print(line)
+        if self.logging_enabled and self.log_handle is not None:
+            self.rotate_log_if_needed()
+            self.log_handle.write(line + '\n')
+            self.log_dirty = True
+
+    def flush_log(self):
+        if self.logging_enabled and self.log_handle is not None:
+            self.log_handle.flush()
+            self.log_dirty = False
+
+    def close_log(self):
+        if self.logging_enabled and self.log_handle is not None:
+            try:
+                self.log('authlogger2 stopped.')
+                self.flush_log()
+            finally:
+                self.log_handle.close()
+                self.log_handle = None
+
+    def rotate_log_if_needed(self):
+        if not self.logging_enabled or not self.log_path:
+            return
+        if not os.path.isfile(self.log_path):
+            return
+        if os.stat(self.log_path).st_size <= self.log_rotate_bytes:
+            return
+
+        self.flush_log()
+        if self.log_handle is not None:
+            self.log_handle.close()
+            self.log_handle = None
+
+        old_path = self.log_path + '.old'
+        old1_path = self.log_path + '.old.1'
+        if os.path.isfile(old_path):
+            if os.path.isfile(old1_path):
+                os.remove(old1_path)
+            os.replace(old_path, old1_path)
+        os.replace(self.log_path, old_path)
+        self.open_log()
+
+    def open_log(self):
+        if not self.logging_enabled:
+            print('-- logging to file is off --')
+            return
+        log_dir = os.path.dirname(self.log_path)
+        os.makedirs(log_dir, exist_ok=True)
+        self.log_handle = open(self.log_path, 'a', encoding='utf-8')
+        self.log(f'authlogger2 started. Version: {VERSION}')
+
+    ############################
+    # Process lifecycle
+    ############################
+    def acquire_single_instance_lock(self):
+        self.lock_handle = open(self.lock_file_path, 'w')
+        try:
+            fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.lock_handle.write(str(os.getpid()))
+            self.lock_handle.flush()
+        except BlockingIOError:
+            print('Another authlogger2 instance is already running (lock busy).')
+            sys.exit(18)
+
+    def release_single_instance_lock(self):
+        if self.lock_handle is None:
+            return
+        try:
+            fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            self.lock_handle.close()
+        finally:
+            self.lock_handle = None
+
+    def setup_signals(self):
+        signal.signal(signal.SIGINT, self.close_gracefully)
+        signal.signal(signal.SIGTERM, self.close_gracefully)
 
     def clear_screen(self):
-        """Clear terminal output for interactive startup readability."""
         if os.name == 'nt':
             os.system('cls')
         else:
             os.system('clear')
 
-    def help(self):
-        """Print fallback help text used by error exits."""
-        print("**something went wrong. I don't know what, it probably means a file didn't exist or you ran as a normie rather than root\n")
-        print("Remember: must run as sudo/root or it cannot block IPs\n")
-
-    def error_arg(self, err: int):
-        """Emit error message mapped to exit code and terminate process."""
-        match err:
-            case 0:
-                print("bye!")
-            case 1:
-                print("no worries, bye!")
-            case 2:
-                self.help()
-            case 3:
-                print("**NEEDS TO RUN AS (SUDO) ROOT, or it cannot access auth.log and set iptables rules")
-                self.help()
-            case 4:
-                print("got stuck in a loop")
-            case 5:
-                print("unable to create or write to logfile")
-            case 6:
-                print("settings.ini file not found.")
-            case 7:
-                print("auth.log file not found.")
-            case 8:
-                print("settings.ini failed to load correctly.")
-            case 9:
-                print("vnc log file not found.")
-            case 10:
-                print("neither auth.log nor vnc log file found/loaded.")
-            case 11:
-                print("for some reason, end of main() was reached. This should not have happened :(")
-            case 12:
-                print("Exiting because restart time is met.")
-            case 13:
-                print("Ctrl-C detected, exiting gracefully.")
-            case 14:
-                print("Shutdown demanded")
-            case 15:
-                print("Error creating logfile directory.")
-            case 16:
-                print("iptables not found or not installed. Cannot block IPs without iptables.")
-            case 17:
-                print("Error writing to blocklist file. Check permissions.")
-            case _:
-                print("dunno, but bye!")
-        sys.exit(err)
-
-    def check_is_linux(self):
-        """Enable debug mode automatically when not running on Linux."""
-        if not sys.platform.startswith('linux'):
-            self.slash = '\\'
-            self.debugmode = True
-            print("not running on linux, debug mode enabled")
-
     def welcome(self):
-        """Print startup banner and version text."""
-        print('\n[==-- Wheel reinvention society presents: authlogger2! --==]\n')
-        print('Does what authlogger does, but cleaner.\n')
-        print("To EXIT use CTRL-C.")
-        print('version: ' + version)
+        print('\n[==-- authlogger2 hardened monitor --==]\n')
+        print('Watches auth/kern/vnc logs and blocks hostile IPs via iptables.\n')
+        print(f'Version: {VERSION}')
+        if self.dry_run:
+            print('Dry-run mode active: no firewall writes performed.')
 
-    def timestamp(self) -> str:
-        """Return local timestamp string for log messages."""
-        return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-
-    def log_data(self, message: str):
-        """Write message to console and optionally to file log."""
-        print(f"[{self.timestamp()}]:{message}")
-        if self.logging_enabled and self.log_file_handle is not None:
-            self.check_log_size()
-            self.log_file_handle.write(f"[{self.timestamp()}]:{message}\n")
-            self.new_log_data = True
-
-    def flush_log_file(self):
-        """Flush pending log file buffer when logging is enabled."""
-        if not self.logging_enabled:
-            return
-        if self.log_file_handle is not None:
-            self.log_file_handle.flush()
-            self.new_log_data = False
-
-    def close_log_file(self):
-        """Close logger output file after writing stop marker."""
-        if not self.logging_enabled:
-            return
-        if self.log_file_handle is None:
-            return
-        self.log_data('authlogger stopped.\n')
-        self.flush_log_file()
-        self.log_file_handle.close()
-        self.log_file_handle = None
-
-    def open_log_file(self):
-        """Open app log file, creating logs directory when needed."""
-        if not self.logging_enabled:
-            print('-- logging to file is off --')
-            return
-
-        log_dir = self.start_dir + self.slash + 'logs'
-        if not os.path.isdir(log_dir):
-            try:
-                os.mkdir(log_dir)
-            except OSError as e:
-                if e.errno != errno.EEXIST:
-                    self.logging_enabled = False
-                    self.close_gracefully(exitcode=15)
-                else:
-                    print("log directory already exists, but should not be here as OS said it wasn't here")
-
-        self.log_file_name = log_dir + self.slash + 'authlogger.log'
-        try:
-            self.log_file_handle = open(self.log_file_name, 'a')
-        except Exception:
-            print('error opening logfile')
-            self.error_arg(5)
-        self.log_data('authlogger2 started. Version: ' + version)
-
-    def check_log_size(self):
-        """Rotate app log at 10MB using .old and .old.1 backups."""
-        if not self.logging_enabled:
-            return
-        if not self.log_file_name:
-            return
-        if os.path.isfile(self.log_file_name):
-            if os.stat(self.log_file_name).st_size > (1024 * 1024 * 10):
-                print('Cycling logfile')
-                self.flush_log_file()
-                if self.log_file_handle is not None:
-                    self.log_file_handle.close()
-                try:
-                    if os.path.isfile(self.log_file_name + '.old'):
-                        if os.path.isfile(self.log_file_name + '.old.1'):
-                            os.remove(self.log_file_name + '.old.1')
-                        os.rename(self.log_file_name + '.old', self.log_file_name + '.old.1')
-                    os.rename(self.log_file_name, self.log_file_name + '.old')
-                except OSError:
-                    print('error renaming logfile')
-                    self.error_arg(6)
-                self.open_log_file()
-
-    def get_args(self):
-        """Parse CLI options and load configuration."""
-        self.log_data('getting args')
+    ############################
+    # Settings
+    ############################
+    def parse_args(self):
         parser = argparse.ArgumentParser()
-        parser.add_argument('-n', '--nolog', action='store_false', help='turn off logging to disk')
+        parser.add_argument('--dry-run', action='store_true', help='debug/dry-run mode (no iptables writes)')
         args = parser.parse_args()
-        self.logging_enabled = args.nolog
+        self.dry_run = bool(args.dry_run)
+        self.debugmode = self.dry_run
 
-        self.ini_file_name = self.start_dir + self.slash + 'settings.ini'
-        if not self.load_settings():
-            self.error_arg(8)
+    def detect_best_path(self, candidates):
+        for path in candidates:
+            if path and os.path.isfile(path):
+                return path
+        return candidates[0] if candidates else ''
 
-    ############################
-    # Settings and policy lists
-    ############################
-    def split_local_ip(self, ip_list: str):
-        """Parse comma-separated local IP/prefix exemptions."""
-        self.aIgnoreIPs = [x.strip() for x in ip_list.split(',') if x.strip()]
-        self.log_data('local IP list: ' + str(self.aIgnoreIPs))
+    def load_settings(self):
+        cfg = configparser.ConfigParser()
 
-    def split_auto_block_users(self, user_list: str):
-        """Parse comma-separated usernames that force immediate blocking."""
-        user_list = user_list.upper()
-        self.log_data('autoblock users: ' + str(user_list))
-        self.aAutoBlockUsers = [x.strip() for x in user_list.split(',') if x.strip()]
+        defaults = {
+            'localip': '127.0.0.1,192.168.,10.,172.16.',
+            'failcount': '3',
+            'restart_time': 'None',
+            'autoblockusers': 'root,admin,pi,ubuntu,ec2-user,administrator,vncuser,ftp,ftpuser',
+            'logging': 'true',
+            'blockdb': os.path.join(self.start_dir, 'authlogger2_state.sqlite3'),
+            'authfile': self.detect_best_path([
+                '/var/log/auth.log',
+                os.path.join(self.start_dir, 'auth.log'),
+            ]),
+            'kernfile': self.detect_best_path([
+                '/var/log/kern.log',
+                os.path.join(self.start_dir, 'kern.log'),
+                os.path.join(self.start_dir, 'kern.log.1'),
+            ]),
+            'vncfile': self.detect_best_path([
+                '/var/log/vncserver-x11.log',
+                os.path.join(self.start_dir, 'vncserver-x11.log'),
+            ]),
+            'poll_ticks': '4',
+            'flush_ticks': '80',
+            'sleep_seconds': '0.25',
+            'install_scan_rule': 'true',
+        }
 
-    def check_local_ip(self, check_string: str) -> bool:
-        """Return True if value matches any local exemption substring."""
-        for item in self.aIgnoreIPs:
-            if item in check_string:
-                return True
-        return False
+        if os.path.isfile(self.settings_path):
+            cfg.read(self.settings_path)
 
-    def check_auto_block_users(self, username: str) -> bool:
-        """Return True when username is in configured auto-block list."""
-        username = (username or '').strip().upper()
-        if username == '':
-            return False
-        if self.debugmode:
-            print('checking user: ' + username)
-        for item in self.aAutoBlockUsers:
-            if item == username:
-                if self.debugmode:
-                    print('bad user: ' + username)
-                return True
-        return False
+        if 'Settings' not in cfg:
+            cfg['Settings'] = {}
 
-    def load_settings(self) -> bool:
-        """Load defaults and apply overrides from settings.ini when present."""
-        self.log_data('loading settings')
+        section = cfg['Settings']
+        get = lambda key: section.get(key, defaults[key])
 
-        self.local_ip = '192.168.'
-        self.failcount = 2
-        self.restart_time = 'None'
+        self.local_exemptions = [x.strip() for x in get('localip').split(',') if x.strip()]
+        self.autoblock_users = [x.strip().upper() for x in get('autoblockusers').split(',') if x.strip()]
 
-        self.block_file_name = self.start_dir + self.slash + 'blocklist.dat'
-        if not self.debugmode:
-            self.auth_file_name = '/var/log/auth.log'
-            self.vnc_file_name = '/var/log/vncserver-x11.log'
-            self.kern_file_name = '/var/log/kern.log'
-        else:
-            self.auth_file_name = self.start_dir + self.slash + 'auth.log'
-            self.vnc_file_name = self.start_dir + self.slash + 'vncserver-x11.log'
-            self.kern_file_name = self.start_dir + self.slash + 'kern.log'
+        try:
+            self.failcount = max(1, int(get('failcount')))
+        except ValueError:
+            self.failcount = 3
 
-        loaded_ok = True
-        if os.path.isfile(self.ini_file_name):
-            self.log_data('reading settings.ini')
-            config = configparser.ConfigParser()
-            try:
-                config.read(self.ini_file_name)
-                self.local_ip = config.get('Settings', 'LocalIP', fallback='192.168.')
-                if not self.debugmode:
-                    self.block_file_name = config.get('Settings', 'blockfile', fallback=self.block_file_name)
-                    self.auth_file_name = config.get('Settings', 'authfile', fallback=self.auth_file_name)
-                    self.kern_file_name = config.get('Settings', 'kernfile', fallback=self.kern_file_name)
-                    self.vnc_file_name = config.get('Settings', 'vncfile', fallback=self.vnc_file_name)
+        self.restart_time = get('restart_time')
+        self.logging_enabled = get('logging').lower() in ('1', 'true', 'yes', 'y', 'on')
 
-                fc = config.get('Settings', 'failcount', fallback='2')
-                self.restart_time = config.get('Settings', 'restart_time', fallback='None')
-                self.sAutoBlockUsers = config.get('Settings', 'autoblockusers', fallback='')
-                try:
-                    self.failcount = int(fc)
-                except ValueError:
-                    self.log_data('error: failcount is not an integer, using default of 2: received-->' + fc)
-                    self.failcount = 2
-                self.log_data('loaded settings.ini:')
-            except Exception:
-                self.log_data('error loading settings.ini')
-                loaded_ok = False
+        self.db_path = get('blockdb')
+        self.auth.path = get('authfile')
+        self.kern.path = get('kernfile')
+        self.vnc.path = get('vncfile')
 
-        self.split_auto_block_users(self.sAutoBlockUsers)
+        try:
+            self.poll_every_ticks = max(1, int(get('poll_ticks')))
+        except ValueError:
+            self.poll_every_ticks = 4
 
-        self.auth_exists = os.path.isfile(self.auth_file_name)
-        self.vnc_exists = os.path.isfile(self.vnc_file_name)
-        self.kern_exists = os.path.isfile(self.kern_file_name)
+        try:
+            self.flush_every_ticks = max(1, int(get('flush_ticks')))
+        except ValueError:
+            self.flush_every_ticks = 80
 
-        self.log_data(f"LocalIP(ini): {self.local_ip}")
-        self.split_local_ip(self.local_ip)
-        self.log_data(f"blockfile: {self.block_file_name}")
-        if self.auth_exists:
-            self.log_data(f"authfile: {self.auth_file_name}")
-        if self.vnc_exists:
-            self.log_data(f"vncfile: {self.vnc_file_name}")
-        if self.kern_exists:
-            self.log_data(f"kernfile: {self.kern_file_name}")
-        self.log_data(f"failcount: {self.failcount}")
-        self.log_data(f"restart_time: {self.restart_time}")
+        try:
+            self.sleep_seconds = max(0.05, float(get('sleep_seconds')))
+        except ValueError:
+            self.sleep_seconds = 0.25
 
-        return loaded_ok
+        self.install_scan_rule = get('install_scan_rule').lower() in ('1', 'true', 'yes', 'y', 'on')
+
+        self.auth.enabled = os.path.isfile(self.auth.path)
+        self.kern.enabled = os.path.isfile(self.kern.path)
+        self.vnc.enabled = os.path.isfile(self.vnc.path)
+
+        self.log(f'Loaded settings from: {self.settings_path if os.path.isfile(self.settings_path) else "defaults"}')
+        self.log(f'Local exemptions: {self.local_exemptions}')
+        self.log(f'Autoblock users: {self.autoblock_users}')
+        self.log(f'failcount: {self.failcount}')
+        self.log(f'restart_time: {self.restart_time}')
+        self.log(f'authfile: {self.auth.path} [{"ok" if self.auth.enabled else "missing"}]')
+        self.log(f'kernfile: {self.kern.path} [{"ok" if self.kern.enabled else "missing"}]')
+        self.log(f'vncfile: {self.vnc.path} [{"ok" if self.vnc.enabled else "missing"}]')
 
     def save_settings(self):
-        """Create settings.ini if absent (preserves original behavior)."""
-        if os.path.isfile(self.ini_file_name):
-            return
-
-        self.log_data('saving settings')
-        config = configparser.ConfigParser()
-        config['Settings'] = {
-            'LocalIP': self.local_ip,
-            'blockfile': self.block_file_name,
-            'authfile': self.auth_file_name,
-            'kernfile': self.kern_file_name,
+        cfg = configparser.ConfigParser()
+        cfg['Settings'] = {
+            'localip': ','.join(self.local_exemptions),
             'failcount': str(self.failcount),
-            'vncfile': self.vnc_file_name,
             'restart_time': self.restart_time,
-            'autoblockusers': self.sAutoBlockUsers,
+            'autoblockusers': ','.join(self.autoblock_users),
+            'logging': 'true' if self.logging_enabled else 'false',
+            'blockdb': self.db_path,
+            'authfile': self.auth.path,
+            'kernfile': self.kern.path,
+            'vncfile': self.vnc.path,
+            'poll_ticks': str(self.poll_every_ticks),
+            'flush_ticks': str(self.flush_every_ticks),
+            'sleep_seconds': str(self.sleep_seconds),
+            'install_scan_rule': 'true' if self.install_scan_rule else 'false',
         }
+
+        settings_dir = os.path.dirname(self.settings_path) or '.'
+        os.makedirs(settings_dir, exist_ok=True)
+
+        fd, temp_path = tempfile.mkstemp(prefix='settings.', suffix='.tmp', dir=settings_dir)
         try:
-            with open(self.ini_file_name, 'w') as configfile:
-                config.write(configfile)
-        except Exception as e:
-            print('Exception: ', e)
-            self.log_data('error saving settings.ini')
+            with os.fdopen(fd, 'w', encoding='utf-8') as tmp:
+                cfg.write(tmp)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(temp_path, self.settings_path)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     ############################
-    # Firewall interaction
+    # Database state
     ############################
-    def check_iptables_installed(self) -> bool:
-        """Detect iptables availability; allow monitor-only fallback mode."""
+    def open_db(self):
+        db_dir = os.path.dirname(self.db_path) or '.'
+        os.makedirs(db_dir, exist_ok=True)
+
+        self.db = sqlite3.connect(self.db_path)
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.db.execute('PRAGMA synchronous=NORMAL')
+        self.db.execute(
+            'CREATE TABLE IF NOT EXISTS ip_events ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+            'ip TEXT NOT NULL,'
+            'event_ts TEXT NOT NULL,'
+            'reason TEXT NOT NULL,'
+            'username TEXT NOT NULL,'
+            'source TEXT NOT NULL'
+            ')'
+        )
+        self.db.execute('CREATE INDEX IF NOT EXISTS idx_events_ip ON ip_events(ip)')
+        self.db.execute('CREATE INDEX IF NOT EXISTS idx_events_ts ON ip_events(event_ts)')
+        self.db.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS uniq_event ON ip_events(ip, event_ts, reason, username, source)'
+        )
+        self.db.execute(
+            'CREATE TABLE IF NOT EXISTS blocked_ips ('
+            'ip TEXT PRIMARY KEY,'
+            'blocked_ts TEXT NOT NULL,'
+            'reason TEXT NOT NULL'
+            ')'
+        )
+        self.db.commit()
+
+    def close_db(self):
+        if self.db is not None:
+            self.db.commit()
+            self.db.close()
+            self.db = None
+
+    def record_event(self, ip: str, event_ts: str, reason: str, username: str, source: str) -> bool:
         try:
-            result = subprocess.run(['/sbin/iptables', '--version'], capture_output=True, timeout=1)
-            if result.returncode == 0:
-                self.iptables_available = True
-                self.log_data('iptables found: ' + result.stdout.decode().strip())
-                return True
-            self.iptables_available = False
-            self.log_data('iptables found but returned error code: ' + str(result.returncode))
+            self.db.execute(
+                'INSERT INTO ip_events(ip, event_ts, reason, username, source) VALUES (?, ?, ?, ?, ?)',
+                (ip, event_ts, reason, username, source),
+            )
+            self.pending_state_write = True
+            return True
+        except sqlite3.IntegrityError:
             return False
-        except FileNotFoundError:
+
+    def count_events_for_ip(self, ip: str) -> int:
+        cur = self.db.execute('SELECT COUNT(*) FROM ip_events WHERE ip = ?', (ip,))
+        return int(cur.fetchone()[0])
+
+    def is_ip_blocked_recorded(self, ip: str) -> bool:
+        cur = self.db.execute('SELECT 1 FROM blocked_ips WHERE ip = ? LIMIT 1', (ip,))
+        return cur.fetchone() is not None
+
+    def record_blocked_ip(self, ip: str, reason: str):
+        self.db.execute(
+            'INSERT OR REPLACE INTO blocked_ips(ip, blocked_ts, reason) VALUES (?, ?, ?)',
+            (ip, self.now_str(), reason),
+        )
+        self.pending_state_write = True
+
+    def startup_reapply_blocks(self):
+        self.log('Startup: re-evaluating saved events for block decisions')
+        cur = self.db.execute('SELECT DISTINCT ip FROM ip_events')
+        for (ip,) in cur.fetchall():
+            count = self.count_events_for_ip(ip)
+            if count >= self.failcount:
+                self.block_ip(ip, f'startup failcount reached: {count}')
+                continue
+
+            cur2 = self.db.execute('SELECT username FROM ip_events WHERE ip = ?', (ip,))
+            for (username,) in cur2.fetchall():
+                if self.is_autoblock_user(username):
+                    self.block_ip(ip, f'startup autoblock user: {username}')
+                    break
+
+    ############################
+    # Firewall
+    ############################
+    def detect_iptables(self):
+        self.iptables_cmd = shutil.which('iptables') or '/sbin/iptables'
+        if not os.path.isfile(self.iptables_cmd) and shutil.which('iptables') is None:
             self.iptables_available = False
-            self.log_data('iptables not found at /sbin/iptables')
-            return False
+            self.log('iptables not found: monitor-only mode')
+            return
+
+        self.iptables_save_cmd = shutil.which('iptables-save') or '/sbin/iptables-save'
+        try:
+            run = subprocess.run([self.iptables_cmd, '--version'], capture_output=True, timeout=2)
+            self.iptables_available = run.returncode == 0
+        except Exception as exc:
+            self.iptables_available = False
+            self.log(f'iptables availability check failed: {exc}')
+
+        if self.iptables_available:
+            self.log('iptables detected and usable')
+        else:
+            self.log('iptables unavailable: monitor-only mode')
+
+    def run_cmd(self, args, timeout=3) -> bool:
+        try:
+            result = subprocess.run(args, timeout=timeout, capture_output=True, text=True)
+            if result.returncode != 0 and self.debugmode:
+                self.log(f'Command failed ({result.returncode}): {args} stderr={result.stderr.strip()}')
+            return result.returncode == 0
         except subprocess.TimeoutExpired:
-            self.iptables_available = False
-            self.log_data('iptables check timed out')
+            self.log(f'Command timeout: {args}')
             return False
-        except Exception as e:
-            self.iptables_available = False
-            self.log_data('Error checking iptables: ' + str(e))
+        except Exception as exc:
+            self.log(f'Command error: {args} exc={exc}')
             return False
 
-    def save_iptables(self):
-        """Persist active iptables rules using iptables-save."""
-        if not self.iptables_available:
-            self.log_data('SaveIPTables skipped: iptables not available')
-            return
-        try:
-            subprocess.call(['/sbin/iptables-save'])
-        except Exception as e:
-            self.log_data('Error saving iptables: ' + str(e))
-
-    def clear_iptables(self):
-        """Flush iptables and install scan-detection LOG rules."""
-        if self.debugmode:
-            self.log_data('CLEAR/debug mode: iptables -F')
+    def setup_firewall_chain(self):
+        if self.dry_run or not self.iptables_available:
             return
 
-        if not self.iptables_available:
-            self.log_data('Skipping iptables clear - iptables not available')
+        # Create dedicated chain and hook it into INPUT once.
+        self.run_cmd([self.iptables_cmd, '-N', self.iptables_chain])
+        if not self.run_cmd([self.iptables_cmd, '-C', 'INPUT', '-j', self.iptables_chain]):
+            self.run_cmd([self.iptables_cmd, '-I', 'INPUT', '1', '-j', self.iptables_chain])
+
+        # Optional scan log rule (avoid duplicate rule insertion).
+        if self.install_scan_rule:
+            rule = [
+                self.iptables_cmd, '-p', 'tcp', '--syn', '-m', 'state', '--state', 'NEW',
+                '-m', 'recent', '--update', '--seconds', '60', '--hitcount', '10',
+                '-j', 'LOG', '--log-prefix', 'PORT_SCAN_DETECTED: '
+            ]
+            if not self.run_cmd([self.iptables_cmd, '-C', 'INPUT'] + rule[1:]):
+                self.run_cmd([self.iptables_cmd, '-A', 'INPUT'] + rule[1:])
+            set_rule = [
+                self.iptables_cmd, '-p', 'tcp', '--syn', '-m', 'state', '--state', 'NEW',
+                '-m', 'recent', '--set'
+            ]
+            if not self.run_cmd([self.iptables_cmd, '-C', 'INPUT'] + set_rule[1:]):
+                self.run_cmd([self.iptables_cmd, '-A', 'INPUT'] + set_rule[1:])
+
+    def save_firewall(self):
+        if self.dry_run or not self.iptables_available:
+            return
+        if self.iptables_save_cmd:
+            self.run_cmd([self.iptables_save_cmd], timeout=5)
+
+    def block_ip(self, ip: str, reason: str):
+        if ip in self.active_blocked_ips or self.is_ip_blocked_recorded(ip):
             return
 
-        self.log_data('clearing iptables and setting up port scan detection rules')
-        try:
-            subprocess.call(['/sbin/iptables', '-F'])
-            subprocess.call(['/sbin/iptables', '-A', 'INPUT', '-p', 'tcp', '--syn', '-m', 'state', '--state', 'NEW', '-m', 'recent', '--set'])
-            subprocess.call(['/sbin/iptables', '-A', 'INPUT', '-p', 'tcp', '--syn', '-m', 'state', '--state', 'NEW', '-m', 'recent', '--update', '--seconds', '60', '--hitcount', '10', '-j', 'LOG', '--log-prefix', 'PORT_SCAN_DETECTED: '])
-            subprocess.call(['/sbin/iptables-save'])
-            self.log_data('done')
-        except Exception as e:
-            self.log_data('Error clearing iptables: ' + str(e))
+        self.active_blocked_ips.add(ip)
+        self.record_blocked_ip(ip, reason)
 
-    ############################
-    # Blocklist model and decisions
-    ############################
-    def is_valid_ip(self, ip: str) -> bool:
-        """Simple IPv4 numeric dotted-quad validation."""
-        if ip.count('.') != 3:
-            return False
-        parts = ip.split('.')
-        if len(parts) != 4:
-            return False
-        for part in parts:
-            if not part.isnumeric():
-                return False
-        return True
-
-    def reverse_datetime(self, dt_string: str) -> str:
-        """Convert internal YYYYMMDDHHMMSS format into readable timestamp."""
-        return time.strftime('%Y-%m-%d %H:%M:%S', time.strptime(dt_string, '%Y%m%d%H%M%S'))
-
-    def print_blocklist(self):
-        """Log blocklist entries and associated event details."""
-        self.log_data('printing blocklist')
-        for idx, row in enumerate(self.aBlocklist):
-            self.log_data(f"[{idx}] {row.ip}:")
-            for i, dt in enumerate(row.aDateTime):
-                username = row.aUsername[i] if i < len(row.aUsername) else ''
-                reason = row.aReason[i] if i < len(row.aReason) else ''
-                self.log_data('-->' + self.reverse_datetime(dt) + f" - u=[{username}] reason: {reason}")
-
-    def block_ip(self, ip: str, reason: str = ''):
-        """Add firewall DROP rule for IP unless already active or unavailable."""
-        if ip in self.aActiveBlocklist:
-            self.log_data('already blocked: ' + ip)
-            return
-
-        self.aActiveBlocklist.append(ip)
-        if self.debugmode:
-            self.log_data('ADD/debug mode: iptables -I INPUT -s ' + ip + ' -j DROP')
+        if self.dry_run:
+            self.log(f'[DRY-RUN] block {ip} reason: {reason}')
             return
 
         if not self.iptables_available:
-            self.log_data('NOT blocking IP ' + ip + ' - iptables not available: ' + reason)
+            self.log(f'iptables unavailable, cannot block {ip}; reason: {reason}')
             return
 
-        self.log_data('Passing to IPTables ->' + ip + ' reason: ' + reason)
-        try:
-            subprocess.call(['/sbin/iptables', '-I', 'INPUT', '-s', ip, '-j', 'DROP'])
-        except Exception as e:
-            self.log_data('Error blocking IP ' + ip + ': ' + str(e))
-            if ip in self.aActiveBlocklist:
-                self.aActiveBlocklist.remove(ip)
+        # Avoid duplicate drop rule in dedicated chain.
+        if self.run_cmd([self.iptables_cmd, '-C', self.iptables_chain, '-s', ip, '-j', 'DROP']):
+            return
 
-    def check_blocklist(self, ip: str, timeblocked: str, reason: str, user: str = '') -> bool:
-        """Insert event into blocklist and trigger blocking when thresholds match."""
-        if not self.is_valid_ip(ip):
-            return False
-
-        found_it = False
-        dtfound = -1
-        for i, row in enumerate(self.aBlocklist):
-            if row.ip == ip:
-                dtfound = i
-                for existing_dt in row.aDateTime:
-                    if existing_dt == timeblocked:
-                        found_it = True
-                        break
-
-        if not found_it:
-            if dtfound >= 0:
-                self.log_data(f"adding datetime: [{dtfound}] {ip} u=[{user}] r=[{reason}]")
-                row = self.aBlocklist[dtfound]
-                row.add_datetime(timeblocked)
-                row.add_reason(reason)
-                row.add_username(user)
-                if self.check_auto_block_users(user):
-                    self.block_ip(ip, 'bad user: ' + user)
-                elif len(row.aDateTime) >= self.failcount:
-                    self.block_ip(ip, 'failcount: ' + str(len(row.aDateTime)) + ' login failures from this IP')
-            else:
-                self.log_data(f"[{len(self.aBlocklist)}] adding: {ip} u=[{user}] r=[{reason}]")
-                new_row = cBlock(ip=ip)
-                new_row.add_datetime(timeblocked)
-                new_row.add_reason(reason)
-                new_row.add_username(user)
-                self.aBlocklist.append(new_row)
-                if self.check_auto_block_users(user):
-                    self.block_ip(ip, 'bad user: ' + user)
-                elif self.failcount == 1:
-                    self.block_ip(ip, 'failcount: login failures set to 1')
-
-        was_new = not found_it
-        if self.debugmode and was_new:
-            print('CBL-foundit')
-        return was_new
+        if self.run_cmd([self.iptables_cmd, '-A', self.iptables_chain, '-s', ip, '-j', 'DROP']):
+            self.log(f'Blocked IP {ip} ({reason})')
+        else:
+            self.log(f'Failed to apply block for {ip}')
 
     ############################
-    # Log parsing and event extraction
+    # Parsing and policy
     ############################
-    def get_datetime(self, line: str, source: str) -> str:
-        """Parse source-specific timestamps into internal sortable format."""
+    def parse_event_ts(self, line: str, source_name: str) -> str:
+        # ISO first token format (auth/kern modern logs)
         try:
-            if source in ('auth.log', 'kern.log'):
-                first = line.split()[0]
-                dt_obj = datetime.datetime.fromisoformat(first.split('+')[0])
-                return dt_obj.strftime('%Y%m%d%H%M%S')
-
-            if source == 'vncserver-x11.log':
-                dt = line.split()[1]
-                dt = dt[:10] + ' ' + dt[11:19]
-                return time.strftime('%Y%m%d%H%M%S', time.strptime(dt, '%Y-%m-%d %H:%M:%S'))
+            first = line.split()[0]
+            if 'T' in first:
+                # fromisoformat doesn't always accept trailing Z.
+                first = first.replace('Z', '+00:00')
+                dt = datetime.datetime.fromisoformat(first)
+                return dt.strftime('%Y%m%d%H%M%S')
         except Exception:
             pass
 
+        # VNC style where second token is ISO timestamp
+        if source_name == 'vncserver-x11.log':
+            try:
+                second = line.split()[1].replace('Z', '+00:00')
+                dt = datetime.datetime.fromisoformat(second)
+                return dt.strftime('%Y%m%d%H%M%S')
+            except Exception:
+                pass
+
+        # Legacy syslog fallback: "Jun 28 03:26:42 ..."
         try:
-            now_year = time.strftime('%Y', time.localtime(time.time()))
-            return time.strftime('%Y%m%d%H%M%S', time.strptime(now_year + ' ' + line[:15], '%Y %b %d %H:%M:%S'))
+            year = time.strftime('%Y', time.localtime())
+            dt = time.strptime(f'{year} {line[:15]}', '%Y %b %d %H:%M:%S')
+            return time.strftime('%Y%m%d%H%M%S', dt)
         except Exception:
             return '20000101000000'
 
+    def normalize_ip(self, candidate: str) -> Optional[str]:
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except Exception:
+            return None
+
+    def is_exempt_ip(self, ip: str) -> bool:
+        for token in self.local_exemptions:
+            token = token.strip()
+            if not token:
+                continue
+            if '/' in token:
+                try:
+                    if ipaddress.ip_address(ip) in ipaddress.ip_network(token, strict=False):
+                        return True
+                except Exception:
+                    continue
+            elif token.endswith('.'):
+                if ip.startswith(token):
+                    return True
+            else:
+                if ip == token:
+                    return True
+        return False
+
+    def is_autoblock_user(self, username: str) -> bool:
+        if not username:
+            return False
+        return username.strip().upper() in self.autoblock_users
+
     def parse_auth_line(self, line: str):
-        """Extract IP/user/reason from supported auth.log failure patterns."""
-        tmp = line.split(' ')
-        if ': Failed password for invalid user' in line:
-            return tmp[-4], tmp[-6], '(auth.log) ' + line[16:]
-        if ': Failed password for' in line:
-            return tmp[-4], tmp[-6], '(auth.log) ' + line[16:]
-        if 'Did not receive identification' in line:
-            return tmp[-3], '', '(auth.log) ' + line[16:]
-        if 'banner exchange' in line and 'invalid format' in line:
-            return tmp[-5], '', '(auth.log) ' + line[16:]
-        if 'Unable to negotiate' in line and 'with ' in line and ' port ' in line:
-            words = line.split()
+        words = line.split()
+
+        if ': Failed password for invalid user' in line and ' from ' in line:
             try:
-                with_idx = words.index('with')
-                if with_idx + 1 < len(words):
-                    return words[with_idx + 1], '', '(auth.log) ' + line[16:]
-            except ValueError:
-                pass
+                idx_from = words.index('from')
+                idx_user = words.index('user') + 1
+                ip = self.normalize_ip(words[idx_from + 1])
+                username = words[idx_user]
+                return ip, username, '(auth.log) ' + line
+            except Exception:
+                return None
+
+        if ': Failed password for' in line and ' from ' in line:
+            try:
+                idx_from = words.index('from')
+                idx_for = words.index('for') + 1
+                username = words[idx_for]
+                if username == 'invalid':
+                    username = words[idx_for + 2]
+                ip = self.normalize_ip(words[idx_from + 1])
+                return ip, username, '(auth.log) ' + line
+            except Exception:
+                return None
+
+        if 'Did not receive identification' in line and ' from ' in line:
+            try:
+                idx = words.index('from')
+                ip = self.normalize_ip(words[idx + 1])
+                return ip, '', '(auth.log) ' + line
+            except Exception:
+                return None
+
+        if 'banner exchange' in line and 'invalid format' in line and ' from ' in line:
+            try:
+                idx = words.index('from')
+                ip = self.normalize_ip(words[idx + 1])
+                return ip, '', '(auth.log) ' + line
+            except Exception:
+                return None
+
+        if 'Unable to negotiate with' in line and ' port ' in line:
+            try:
+                idx = words.index('with')
+                ip = self.normalize_ip(words[idx + 1])
+                return ip, '', '(auth.log) ' + line
+            except Exception:
+                return None
+
         if '(sshd:auth): authentication failure;' in line:
-            words = line.split()
-            found_ip = ''
+            found_ip = None
             found_user = 'none'
             for word in words:
                 if word.startswith('rhost='):
-                    found_ip = word.split('=', 1)[1]
+                    found_ip = self.normalize_ip(word.split('=', 1)[1])
                 elif word.startswith('user='):
-                    candidate_user = word.split('=', 1)[1]
-                    if candidate_user != '':
-                        found_user = candidate_user
-            if found_ip != '':
-                return found_ip, found_user, '(auth.log) ' + line[16:]
+                    user = word.split('=', 1)[1].strip()
+                    if user:
+                        found_user = user
+            if found_ip:
+                return found_ip, found_user, '(auth.log) ' + line
+
+        return None
+
+    def parse_kern_line(self, line: str):
+        if 'PORT_SCAN_DETECTED:' not in line or 'SRC=' not in line:
             return None
+        for word in line.split():
+            if word.startswith('SRC='):
+                ip = self.normalize_ip(word.split('=', 1)[1])
+                if ip:
+                    return ip, '', '(kern.log) ' + line
         return None
 
     def parse_vnc_line(self, line: str):
-        """Extract IP and reason from VNC auth failure records."""
         if '[AuthFailure]' not in line:
             return None
-        tmp = line.split(' ')
-        ip = tmp[6].split('::')[0]
-        return ip, '', '(vncserver-x11.log) ' + line[30:]
-
-    def parse_kern_line(self, line: str):
-        """Extract source IP from PORT_SCAN_DETECTED kernel log entries."""
-        if 'PORT_SCAN_DETECTED:' not in line or ' SRC=' not in line:
-            return None
-        for token in line.split(' '):
-            if token.startswith('SRC='):
-                return token.split('=', 1)[1], '', '(kern.log) ' + line
+        words = line.split()
+        for word in words:
+            if '::' in word and '.' in word:
+                maybe_ip = word.split('::', 1)[0].strip(':')
+                ip = self.normalize_ip(maybe_ip)
+                if ip:
+                    return ip, '', '(vncserver-x11.log) ' + line
         return None
 
-    def scan_and_compare(self, line: str, source: str) -> bool:
-        """Parse line, apply exemptions, and store/block if event is new."""
-        parsed = None
-        if source == 'auth.log':
-            parsed = self.parse_auth_line(line)
-        elif source == 'vncserver-x11.log':
-            parsed = self.parse_vnc_line(line)
-        elif source == 'kern.log':
-            parsed = self.parse_kern_line(line)
+    def parse_line(self, source_name: str, line: str):
+        if source_name == 'auth.log':
+            return self.parse_auth_line(line)
+        if source_name == 'kern.log':
+            return self.parse_kern_line(line)
+        if source_name == 'vncserver-x11.log':
+            return self.parse_vnc_line(line)
+        return None
 
-        if parsed is None:
+    def process_line(self, source: SourceFile, line: str):
+        parsed = self.parse_line(source.name, line)
+        if not parsed:
             return False
 
-        check_ip, username, reason = parsed
-        if self.check_local_ip(check_ip):
+        ip, username, reason = parsed
+        if not ip:
+            return False
+
+        if self.is_exempt_ip(ip):
             if self.debugmode:
-                print('SAC-local-exempt: ' + check_ip)
+                self.log(f'exempt ip skipped: {ip}')
             return False
 
-        date_string = self.get_datetime(line, source)
-        is_new = self.check_blocklist(check_ip, date_string, reason, user=username)
-        if self.debugmode and is_new:
-            print('SAC-newblock')
-        return is_new
+        event_ts = self.parse_event_ts(line, source.name)
+        inserted = self.record_event(ip, event_ts, reason, username, source.name)
+        if not inserted:
+            return False
 
-    def save_blocklist(self):
-        """Persist blocklist to blocklist.dat with guarded error handling."""
-        self.log_data('saving blocklist')
-        try:
-            with open(self.block_file_name, 'wb') as fblock:
-                pickle.dump(self.aBlocklist, fblock)
-                fblock.flush()
-        except PermissionError:
-            self.log_data('ERROR: Permission denied writing to blocklist file: ' + self.block_file_name)
-            self.close_gracefully(exitcode=17)
-        except OSError as e:
-            self.log_data('ERROR: OS error writing to blocklist file: ' + str(e))
-            self.close_gracefully(exitcode=17)
-        except Exception as e:
-            self.log_data('ERROR: Unexpected error writing to blocklist file: ' + str(e))
-            self.close_gracefully(exitcode=17)
+        if self.is_autoblock_user(username):
+            self.block_ip(ip, f'autoblock user: {username}')
+            return True
 
-    def first_run_check_blocklist(self):
-        """On startup, re-enforce eligible saved blocks in firewall."""
-        self.log_data('checking blocklist/first run: ' + str(len(self.aBlocklist)) + ' entries')
-        for row in self.aBlocklist:
-            if len(row.aDateTime) >= self.failcount:
-                self.block_ip(row.ip, 'reason: ' + str(len(row.aDateTime)) + ' login failures from this IP')
-            else:
-                for user in row.aUsername:
-                    if self.check_auto_block_users(user):
-                        self.block_ip(row.ip, 'bad user: ' + user)
-                        break
+        count = self.count_events_for_ip(ip)
+        if count >= self.failcount:
+            self.block_ip(ip, f'failcount reached: {count}')
+            return True
 
-    def open_blocklist(self):
-        """Load blocklist from disk and normalize into cBlock objects."""
-        self.log_data('opening blocklist')
-        if os.path.isfile(self.block_file_name):
-            try:
-                with open(self.block_file_name, 'rb') as fblock:
-                    loaded = pickle.load(fblock)
-                self.aBlocklist = self.normalize_loaded_blocklist(loaded)
-            except Exception as e:
-                print('Exception: ', e)
-                self.log_data('blocklist file is corrupt, will be overwritten on save')
-                self.aBlocklist = []
-        else:
-            self.log_data('blocklist file not found, will be created on save')
-            self.aBlocklist = []
-
-        self.first_run_check_blocklist()
-
-    def normalize_loaded_blocklist(self, loaded):
-        """Normalize unpickled data into safe in-memory cBlock instances."""
-        result = []
-        if not isinstance(loaded, list):
-            return result
-
-        for item in loaded:
-            try:
-                if isinstance(item, cBlock):
-                    result.append(item)
-                    continue
-
-                if hasattr(item, 'ip') and hasattr(item, 'aDateTime'):
-                    new_item = cBlock(ip=getattr(item, 'ip', None))
-                    for dt in list(getattr(item, 'aDateTime', [])):
-                        new_item.add_datetime(dt)
-                    for reason in list(getattr(item, 'aReason', [])):
-                        new_item.add_reason(reason)
-                    for username in list(getattr(item, 'aUsername', [])):
-                        new_item.add_username(username)
-                    result.append(new_item)
-            except Exception:
-                continue
-        return result
+        return True
 
     ############################
-    # Stream and rotation handling
+    # Stream read / rotation
     ############################
-    def get_file_inode(self, file_path: str):
-        """Return file inode for rotation tracking, or None if missing."""
+    def get_inode(self, path: str) -> Optional[int]:
         try:
-            stat_info = os.stat(file_path)
-            return stat_info.st_ino
+            return os.stat(path).st_ino
         except FileNotFoundError:
             return None
 
-    def is_log_rotated(self, original_inode, file_path: str) -> bool:
-        """Detect log rotation by inode change."""
-        current_inode = self.get_file_inode(file_path)
-        if current_inode is None:
-            self.log_data('File not found while checking inode: ' + file_path)
-            return False
-        if original_inode != current_inode:
-            self.log_data('Log file rotated (inode change: ' + file_path + '): ' + str(original_inode) + ':' + str(current_inode))
-            time.sleep(1.5)
-            return True
-        return False
+    def open_source(self, source: SourceFile):
+        source.enabled = os.path.isfile(source.path)
+        if not source.enabled:
+            source.handle = None
+            source.inode = None
+            source.pos = 0
+            return
 
-    def open_auth_stream(self):
-        """Open auth.log stream and initialize tracking state."""
-        self.auth_pos = 0
-        try:
-            self.log_data('opening ' + self.auth_file_name)
-            self.auth_file_handle = open(self.auth_file_name, 'r')
-            self.auth_inode = self.get_file_inode(self.auth_file_name)
-            self.auth_exists = True
-        except Exception as e:
-            self.auth_exists = False
-            print('Exception: ', e)
-            self.log_data(self.auth_file_name + ' error while loading, exception: ' + str(e))
+        source.handle = open(source.path, 'r', encoding='utf-8', errors='replace')
+        source.inode = self.get_inode(source.path)
+        source.pos = os.stat(source.path).st_size
+        source.handle.seek(source.pos)
+        self.log(f'opened stream: {source.path} pos={source.pos}')
 
-    def open_vnc_stream(self):
-        """Open vnc log stream and initialize tracking state."""
-        self.vnc_pos = 0
-        self.vnc_exists = False
-        if self.vnc_file_name != '':
+    def close_source(self, source: SourceFile):
+        if source.handle is not None:
             try:
-                self.log_data('opening ' + self.vnc_file_name)
-                self.vnc_file_handle = open(self.vnc_file_name, 'r')
-                self.vnc_inode = self.get_file_inode(self.vnc_file_name)
-                self.vnc_exists = True
-            except Exception as e:
-                self.vnc_exists = False
-                print('Exception: ', e)
-                self.log_data(self.vnc_file_name + ' error while loading, exception: ' + str(e))
+                source.handle.close()
+            except Exception:
+                pass
+        source.handle = None
 
-    def open_kern_stream(self):
-        """Open kern.log stream and initialize tracking state."""
-        self.kern_pos = 0
+    def reopen_source(self, source: SourceFile):
+        self.close_source(source)
+        self.open_source(source)
+
+    def check_rotation_or_truncation(self, source: SourceFile):
+        if not source.enabled:
+            return
+
+        if not os.path.isfile(source.path):
+            source.enabled = False
+            self.close_source(source)
+            self.log(f'source disappeared: {source.path}')
+            return
+
         try:
-            self.log_data('opening ' + self.kern_file_name)
-            self.kern_file_handle = open(self.kern_file_name, 'r')
-            self.kern_inode = self.get_file_inode(self.kern_file_name)
-            self.kern_exists = True
-        except Exception as e:
-            self.kern_exists = False
-            print('Exception: ', e)
-            self.log_data(self.kern_file_name + ' error while loading, exception: ' + str(e))
-
-    def close_auth_stream(self):
-        """Close auth stream and mark source unavailable."""
-        if self.auth_file_handle is None:
-            self.auth_exists = False
-            return
-        try:
-            self.log_data('closing ' + self.auth_file_name)
-            self.auth_file_handle.close()
-        except Exception as e:
-            print('Exception: ', e)
-            self.log_data(self.auth_file_name + ' error while closing')
-        self.auth_exists = False
-
-    def close_vnc_stream(self):
-        """Close VNC stream and mark source unavailable."""
-        if not self.vnc_exists or self.vnc_file_handle is None:
-            return
-        try:
-            self.log_data('closing ' + self.vnc_file_name)
-            self.vnc_file_handle.close()
-        except Exception as e:
-            print('Exception: ', e)
-            self.log_data(self.vnc_file_name + ' error while closing')
-        self.vnc_exists = False
-
-    def close_kern_stream(self):
-        """Close kern stream and mark source unavailable."""
-        if not self.kern_exists or self.kern_file_handle is None:
-            return
-        try:
-            self.log_data('closing ' + self.kern_file_name)
-            self.kern_file_handle.close()
-        except Exception as e:
-            print('Exception: ', e)
-            self.log_data(self.kern_file_name + ' error while closing')
-        self.kern_exists = False
-
-    def reopen_log_stream(self, which: str):
-        """Reopen selected source stream after rotation detection."""
-        if which == 'auth':
-            self.close_auth_stream()
-            self.open_auth_stream()
-            return
-        if which == 'vnc':
-            self.close_vnc_stream()
-            self.open_vnc_stream()
-            return
-        if which == 'kern':
-            self.close_kern_stream()
-            self.open_kern_stream()
-            return
-        self.log_data('error: ReOpenLogFilesAsStream(), unknown which: ' + which)
-
-    ############################
-    # Polling checks
-    ############################
-    def check_auth_log(self) -> bool:
-        """Process newly appended lines from auth.log."""
-        if not self.auth_exists or self.auth_file_handle is None:
-            return False
-        try:
-            current_size = os.stat(self.auth_file_name).st_size
+            stat_info = os.stat(source.path)
         except FileNotFoundError:
-            self.auth_exists = False
+            source.enabled = False
+            self.close_source(source)
+            return
+
+        current_inode = stat_info.st_ino
+        current_size = stat_info.st_size
+
+        if source.inode != current_inode:
+            self.log(f'rotation detected (inode): {source.path}')
+            self.reopen_source(source)
+            return
+
+        if current_size < source.pos:
+            self.log(f'truncation detected: {source.path}')
+            source.pos = 0
+            if source.handle is not None:
+                source.handle.seek(0)
+
+    def read_new_lines(self, source: SourceFile) -> bool:
+        if not source.enabled or source.handle is None:
             return False
 
-        block_status = False
-        if current_size > self.auth_pos:
-            self.auth_file_handle.seek(self.auth_pos)
-            new_data = self.auth_file_handle.read()
-            for line in new_data.split('\n'):
-                if self.scan_and_compare(line, 'auth.log'):
-                    block_status = True
-            self.auth_pos = current_size
-        return block_status
-
-    def check_vnc_log(self) -> bool:
-        """Process newly appended lines from vnc log."""
-        if not self.vnc_exists or self.vnc_file_handle is None:
-            return False
-        try:
-            current_size = os.stat(self.vnc_file_name).st_size
-        except FileNotFoundError:
-            self.vnc_exists = False
+        changed = False
+        source.handle.seek(source.pos)
+        new_data = source.handle.read()
+        if not new_data:
             return False
 
-        block_status = False
-        if current_size > self.vnc_pos:
-            self.vnc_file_handle.seek(self.vnc_pos)
-            new_data = self.vnc_file_handle.read()
-            for line in new_data.split('\n'):
-                if self.scan_and_compare(line, 'vncserver-x11.log'):
-                    block_status = True
-            self.vnc_pos = current_size
-        return block_status
-
-    def check_kern_log(self) -> bool:
-        """Process newly appended lines from kern.log."""
-        if not self.kern_exists or self.kern_file_handle is None:
-            return False
-        try:
-            current_size = os.stat(self.kern_file_name).st_size
-        except FileNotFoundError:
-            self.kern_exists = False
-            return False
-
-        block_status = False
-        if current_size > self.kern_pos:
-            self.kern_file_handle.seek(self.kern_pos)
-            new_data = self.kern_file_handle.read()
-            for line in new_data.split('\n'):
-                if self.scan_and_compare(line, 'kern.log'):
-                    block_status = True
-            self.kern_pos = current_size
-        return block_status
+        source.pos = source.handle.tell()
+        for line in new_data.splitlines():
+            if self.process_line(source, line):
+                changed = True
+        return changed
 
     ############################
-    # Runtime loop controls
+    # Runtime checks
     ############################
+    def check_restart_time(self):
+        if not self.restart_time or self.restart_time.lower() == 'none':
+            return
+        now_time = time.strftime('%H:%M:%S', time.localtime())
+        if now_time == self.restart_time:
+            self.log(f'restart time reached: {now_time}')
+            self.close_gracefully(exitcode=12)
+
     def am_alive(self):
-        """Emit hourly heartbeat log entry to show process is alive."""
-        nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+        nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         if (nowtime[-5:-3] == '00') and (nowtime[-8:-6] != self.last_checkin_hour):
             self.last_checkin_hour = nowtime[-8:-6]
-            self.log_data('Checking in, nothing to report')
+            self.log('Checking in, nothing to report')
 
-    def check_restart_time(self):
-        """Exit at configured restart time for external restart wrappers."""
-        ntime = time.strftime('%H:%M:%S', time.localtime(time.time()))
-        if ntime == self.restart_time:
-            self.log_data('restarting at ' + ntime)
-            if not self.debugmode:
-                self.close_gracefully(exitcode=12)
-            else:
-                print('RESTART/debug mode: restarting at ' + ntime)
+    def commit_state_if_needed(self):
+        if self.pending_state_write and self.db is not None:
+            self.db.commit()
+            self.pending_state_write = False
 
-    def close_gracefully(self, signal_num=None, frame=None, exitcode: Optional[int] = 0):
-        """Central shutdown path: close streams, persist state, exit."""
-        self.log_data('closing...')
-        self.log_data('closing streams')
-
-        if self.auth_exists and (exitcode != 10):
-            self.close_auth_stream()
-        if self.kern_exists and (exitcode != 10):
-            self.close_kern_stream()
-        if self.vnc_exists and (exitcode != 10):
-            self.close_vnc_stream()
-
-        self.save_blocklist()
-        self.save_settings()
-        self.close_log_file()
-
-        if not self.debugmode:
-            self.save_iptables()
+    ############################
+    # Shutdown / error
+    ############################
+    def close_gracefully(self, signal_num=None, frame=None, exitcode=0):
+        try:
+            self.log('closing...')
+            self.close_source(self.auth)
+            self.close_source(self.kern)
+            self.close_source(self.vnc)
+            self.commit_state_if_needed()
+            self.save_settings()
+            self.save_firewall()
+            self.close_db()
+            self.close_log()
+        finally:
+            self.release_single_instance_lock()
 
         if exitcode is not None:
-            self.error_arg(exitcode)
+            sys.exit(exitcode)
 
-    def run(self):
-        """Program entry flow: initialize, load, monitor forever."""
-        signal.signal(signal.SIGINT, self.close_gracefully)
-        signal.signal(signal.SIGTERM, self.close_gracefully)
-
+    ############################
+    # Startup and main loop
+    ############################
+    def setup(self):
+        self.parse_args()
         self.clear_screen()
-        self.check_is_linux()
-
-        self.start_dir = os.getcwd().removesuffix(self.slash)
-        self.open_log_file()
+        self.acquire_single_instance_lock()
+        self.open_log()
         self.welcome()
-        self.get_args()
+        self.setup_signals()
 
-        if self.debugmode:
-            print('A+') if os.path.isfile(self.auth_file_name) else print('A-')
-            print('V+') if os.path.isfile(self.vnc_file_name) else print('V-')
-            print('K+') if os.path.isfile(self.kern_file_name) else print('K-')
-            self.flush_count = 10
+        self.load_settings()
+        self.open_db()
 
-        time.sleep(3)
-        self.check_iptables_installed()
-        if not self.iptables_available:
-            self.log_data('WARNING: iptables not available - IP blocking disabled, but monitoring will continue')
+        self.detect_iptables()
+        self.setup_firewall_chain()
 
-        self.clear_iptables()
-        self.open_blocklist()
-        self.print_blocklist()
+        self.open_source(self.auth)
+        self.open_source(self.kern)
+        self.open_source(self.vnc)
 
-        self.log_data('opening logfiles as stream')
-
-        if not (self.auth_exists or self.kern_exists):
+        if not (self.auth.enabled or self.kern.enabled or self.vnc.enabled):
+            self.log('No log sources available. Exiting.')
             self.close_gracefully(exitcode=10)
 
-        if self.auth_exists:
-            self.open_auth_stream()
-        if self.kern_exists:
-            self.open_kern_stream()
-        #if self.vnc_exists:
-        #    self.open_vnc_stream()
+        self.startup_reapply_blocks()
+        self.commit_state_if_needed()
 
+    def run_loop(self):
         while True:
-            # Fast loop: periodic flush work every N ticks.
-            self.flush_tick += 1
-            if self.flush_tick > self.flush_count:
-                self.flush_tick = 0
-                self.flush_log_file()
-                if self.block_status:
-                    if self.debugmode:
-                        print('New blocks added to blocklist file')
-                    self.save_blocklist()
-                    self.block_status = False
+            try:
+                self.tick_flush += 1
+                if self.tick_flush >= self.flush_every_ticks:
+                    self.tick_flush = 0
+                    self.flush_log()
+                    self.commit_state_if_needed()
 
-            self.check_restart_time()
-            self.run_tick += 1
-            if self.run_tick >= self.run_every:
-                # Slow loop: monitor/reopen/scan every ~1s (0.25 * run_every).
-                self.run_tick = 0
-                self.am_alive()
+                self.check_restart_time()
 
-                if self.auth_exists and self.is_log_rotated(self.auth_inode, self.auth_file_name):
-                    self.reopen_log_stream('auth')
-                if self.kern_exists and self.is_log_rotated(self.kern_inode, self.kern_file_name):
-                    self.reopen_log_stream('kern')
-                if self.vnc_exists and self.is_log_rotated(self.vnc_inode, self.vnc_file_name):
-                    self.reopen_log_stream('vnc')
+                self.tick_poll += 1
+                if self.tick_poll >= self.poll_every_ticks:
+                    self.tick_poll = 0
+                    self.am_alive()
 
-                if self.auth_exists:
-                    self.auth_blocks = self.check_auth_log()
-                if self.kern_exists:
-                    self.kern_blocks = self.check_kern_log()
-                if self.vnc_exists:
-                    self.vnc_blocks = self.check_vnc_log()
+                    for source in (self.auth, self.kern, self.vnc):
+                        if source.enabled:
+                            self.check_rotation_or_truncation(source)
+                            self.read_new_lines(source)
 
-                if self.auth_blocks or self.vnc_blocks or self.kern_blocks:
-                    self.block_status = True
+                    if not (self.auth.enabled or self.kern.enabled or self.vnc.enabled):
+                        self.log('All sources unavailable. Exiting.')
+                        self.close_gracefully(exitcode=10)
 
-                if not (self.auth_exists or self.kern_exists):
-                    self.close_gracefully(exitcode=10)
+                time.sleep(self.sleep_seconds)
 
-            time.sleep(0.25)
+            except SystemExit:
+                raise
+            except Exception:
+                self.log('Unhandled exception in main loop:')
+                self.log(traceback.format_exc())
+                self.commit_state_if_needed()
+                time.sleep(1.0)
+
+    def run(self):
+        self.setup()
+        self.run_loop()
 
 
 def main():
-    """Instantiate and run AuthLogger2."""
     app = AuthLogger2()
     app.run()
 
