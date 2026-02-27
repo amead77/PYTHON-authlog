@@ -1,7 +1,13 @@
 # Authlogger 1 was 99% written by me. This version is based on v1.0-2026/02/27r13 but is a near complete 
 # rewrite with a new codebase and architecture. The prior version is available as authlogger.py for reference,
 # but authlogger2.py should be considered a new program with the same general purpose and some shared concepts,
-# rather than a direct edit of the prior code. I let GPT-5.3 go mad on this version.
+# rather than a direct edit of the prior code. 
+# I let GPT-5.3 go mad on this version.
+# AI has become so good at writing code, but only if carefully guided and reviewed. It is better than I am, which
+# isn't exactly difficult, as most humans are too. This program stands as an example of pre-AI (authlogger 1) 
+# and post-AI (authlogger 2) code quality for myself. 
+# I've gone from writing code, to just reviewing, making some edits and guiding the AI.
+# The downside of not writing much code, is that it is easy to lose track of what is actually happening in the codebase.
 import argparse
 import configparser
 import datetime
@@ -35,7 +41,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r27"
+version = "v2.1-2026/02/27r28"
 
 
 @dataclass
