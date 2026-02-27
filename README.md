@@ -37,14 +37,16 @@ If you're not willing to live on the edge, go use fail2ban, it is probably more 
 for authlogger.py raspberry pi os no longer creates auth.log or includes iptables.
 To enable auth.log file and Iptables..
 
-1> apt install rsyslog
-2> systemctl enable rsyslog
-3> apt install iptables
-4> apt install tmux
+1. apt install rsyslog
+2. systemctl enable rsyslog
+3. apt install iptables
+4. apt install tmux
+
 
 If using my startup script along with tmux and you want it to start on boot, use "crontab -e" and add the following line (edit to suit your system):
-
+```
 @reboot /home/adam/Documents/Programming/PYTHON-authlog/alog.sh >> /home/adam/Documents/Programming/PYTHON-authlog/alog.log 2>&1
+```
 
 ## check paths in settings.ini and alog.sh
 
