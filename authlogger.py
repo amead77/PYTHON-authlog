@@ -82,7 +82,7 @@ import shutil
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2026/02/25r01"
+version = "v1.0-2026/02/27r01"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
@@ -458,9 +458,13 @@ def ClearIPTables():
     global iptablesAvailable
     if not debugmode:
         if iptablesAvailable:
-            LogData('clearing iptables')
+            LogData('clearing iptables and setting up port scan detection rules')
             try:
                 subprocess.call(['/sbin/iptables', '-F'])
+                # port scan detection, check kern.log
+                subprocess.call(['iptables -A INPUT -p tcp --syn -m state --state NEW -m recent --set'])
+                subprocess.call(['iptables -A INPUT -p tcp --syn -m state --state NEW -m recent --update --seconds 60 --hitcount 10 -j LOG --log-prefix "PORT_SCAN_DETECTED: "'])
+                # save rules
                 subprocess.call(['/sbin/iptables-save'])
                 LogData('done')
             except Exception as e:
