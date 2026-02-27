@@ -41,7 +41,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r28"
+version = "v2.1-2026/02/27r31"
 
 
 @dataclass
@@ -59,7 +59,8 @@ class AuthLogger2:
         self.dry_run = False
         self.debugmode = False
         self.cwd = os.getcwd()
-        self.start_dir = self.cwd.rstrip('/')
+        self.script_dir = os.path.dirname(os.path.realpath(__file__)) if '__file__' in globals() else self.cwd
+        self.start_dir = self.script_dir.rstrip('/')
         self.settings_path = os.path.join(self.start_dir, 'settings.ini')
 
         self.logging_enabled = True
