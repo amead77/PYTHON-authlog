@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r22"
+version = "v2.1-2026/02/27r27"
 
 
 @dataclass
@@ -88,9 +88,12 @@ class AuthLogger2:
         self.active_blocked_ips = set()
         self.iptables_cmd = None
         self.iptables_save_cmd = None
+        self.iptables_restore_cmd = None
         self.iptables_available = False
         self.iptables_chain = 'AUTHLOGGER_INPUT'
         self.install_scan_rule = True
+        self.startup_restore_batch_size = 500
+        self.startup_restore_progress_every = 500
 
         self.lock_file_path = os.path.join(self.start_dir, '.authlogger2.lock')
         self.lock_handle = None
@@ -277,6 +280,8 @@ class AuthLogger2:
             'flush_ticks': '80',
             'sleep_seconds': '0.25',
             'log_buffer_seconds': '1.0',
+            'startup_restore_batch_size': '500',
+            'startup_restore_progress_every': '500',
             'install_scan_rule': 'true',
         }
 
@@ -325,6 +330,16 @@ class AuthLogger2:
         except ValueError:
             self.log_buffer_interval_seconds = 1.0
 
+        try:
+            self.startup_restore_batch_size = max(1, int(get('startup_restore_batch_size')))
+        except ValueError:
+            self.startup_restore_batch_size = 500
+
+        try:
+            self.startup_restore_progress_every = max(1, int(get('startup_restore_progress_every')))
+        except ValueError:
+            self.startup_restore_progress_every = 500
+
         self.install_scan_rule = get('install_scan_rule').lower() in ('1', 'true', 'yes', 'y', 'on')
 
         self.auth.enabled = os.path.isfile(self.auth.path)
@@ -337,6 +352,8 @@ class AuthLogger2:
         self.log(f'failcount: {self.failcount}')
         self.log(f'restart_time: {self.restart_time}')
         self.log(f'log_buffer_seconds: {self.log_buffer_interval_seconds}')
+        self.log(f'startup_restore_batch_size: {self.startup_restore_batch_size}')
+        self.log(f'startup_restore_progress_every: {self.startup_restore_progress_every}')
         self.log(f'authfile: {self.auth.path} [{"ok" if self.auth.enabled else "missing"}]')
         self.log(f'kernfile: {self.kern.path} [{"ok" if self.kern.enabled else "missing"}]')
         self.log(f'vncfile: {self.vnc.path} [{"ok" if self.vnc.enabled else "missing"}]')
@@ -357,6 +374,8 @@ class AuthLogger2:
             'flush_ticks': str(self.flush_every_ticks),
             'sleep_seconds': str(self.sleep_seconds),
             'log_buffer_seconds': str(self.log_buffer_interval_seconds),
+            'startup_restore_batch_size': str(self.startup_restore_batch_size),
+            'startup_restore_progress_every': str(self.startup_restore_progress_every),
             'install_scan_rule': 'true' if self.install_scan_rule else 'false',
         }
 
@@ -466,6 +485,11 @@ class AuthLogger2:
             return
 
         self.iptables_save_cmd = shutil.which('iptables-save') or '/sbin/iptables-save'
+        restore_candidate = shutil.which('iptables-restore') or '/sbin/iptables-restore'
+        if os.path.isfile(restore_candidate) or shutil.which('iptables-restore') is not None:
+            self.iptables_restore_cmd = restore_candidate
+        else:
+            self.iptables_restore_cmd = None
         try:
             run = subprocess.run([self.iptables_cmd, '--version'], capture_output=True, timeout=2)
             self.iptables_available = run.returncode == 0
@@ -539,6 +563,52 @@ class AuthLogger2:
         cur = self.db.execute('SELECT ip, reason FROM blocked_ips ORDER BY ip ASC')
         return cur.fetchall()
 
+    def apply_block_batch_with_restore(self, ip_batch) -> bool:
+        if not ip_batch:
+            return True
+        if not self.iptables_restore_cmd:
+            return False
+
+        payload_lines = ['*filter']
+        payload_lines.extend(
+            f'-A {self.iptables_chain} -s {ip} -j DROP' for ip in ip_batch
+        )
+        payload_lines.append('COMMIT')
+        payload = '\n'.join(payload_lines) + '\n'
+
+        try:
+            result = subprocess.run(
+                [self.iptables_restore_cmd, '--noflush'],
+                input=payload,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                if self.debugmode:
+                    self.log(
+                        f'iptables-restore batch failed ({result.returncode}): '
+                        f'{result.stderr.strip()}'
+                    )
+                return False
+            return True
+        except subprocess.TimeoutExpired:
+            self.log('iptables-restore batch timeout during startup restore')
+            return False
+        except Exception as exc:
+            self.log(f'iptables-restore batch error during startup restore: {exc}')
+            return False
+
+    def apply_block_batch_fallback(self, ip_batch):
+        restored = 0
+        failed = 0
+        for ip in ip_batch:
+            if self.run_cmd([self.iptables_cmd, '-A', self.iptables_chain, '-s', ip, '-j', 'DROP']):
+                restored += 1
+            else:
+                failed += 1
+        return restored, failed
+
     def restore_saved_blocks_to_firewall(self):
         saved = self.get_saved_blocked_ips()
         self.log(f'Loading saved blocks into firewall ({len(saved)} total)...')
@@ -547,25 +617,47 @@ class AuthLogger2:
         failed = 0
         skipped = 0
 
-        for ip, reason in saved:
-            self.active_blocked_ips.add(ip)
+        total = len(saved)
+        progress_every = max(1, int(self.startup_restore_progress_every))
+        batch_size = max(1, int(self.startup_restore_batch_size))
+        last_progress_idx = 0
 
-            if self.dry_run:
+        if self.dry_run:
+            for idx, (ip, _reason) in enumerate(saved, start=1):
+                self.active_blocked_ips.add(ip)
                 restored += 1
-                continue
-
-            if not self.iptables_available:
-                failed += 1
-                continue
-
-            if self.run_cmd([self.iptables_cmd, '-C', self.iptables_chain, '-s', ip, '-j', 'DROP']):
-                skipped += 1
-                continue
-
-            if self.run_cmd([self.iptables_cmd, '-A', self.iptables_chain, '-s', ip, '-j', 'DROP']):
-                restored += 1
+                if (idx % progress_every) == 0 or idx == total:
+                    self.log(f'[DRY-RUN] Loading {last_progress_idx}..{idx} of {total}')
+                    last_progress_idx = idx
+        elif not self.iptables_available:
+            failed = total
+            for ip, _reason in saved:
+                self.active_blocked_ips.add(ip)
+        else:
+            use_restore_batches = bool(self.iptables_restore_cmd)
+            if use_restore_batches:
+                self.log('Startup restore mode: batched iptables-restore')
             else:
-                failed += 1
+                self.log('Startup restore mode: per-IP append fallback')
+
+            batch = []
+            for idx, (ip, _reason) in enumerate(saved, start=1):
+                self.active_blocked_ips.add(ip)
+                batch.append(ip)
+
+                if len(batch) >= batch_size or idx == total:
+                    if use_restore_batches and self.apply_block_batch_with_restore(batch):
+                        restored += len(batch)
+                    else:
+                        batch_restored, batch_failed = self.apply_block_batch_fallback(batch)
+                        restored += batch_restored
+                        failed += batch_failed
+
+                    batch.clear()
+
+                if (idx % progress_every) == 0 or idx == total:
+                    self.log(f'Loading {last_progress_idx}..{idx} of {total}')
+                    last_progress_idx = idx
 
         if self.dry_run:
             self.log(
