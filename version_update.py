@@ -10,7 +10,7 @@
 ################################################
 
 
-import os, sys, datetime, time
+import os, sys, datetime, time, tempfile
 
 def GetVersion(inputstr):
     #return the version number from the input string
@@ -50,33 +50,40 @@ if __name__ == '__main__':
         print('file not found: ' + filename)
         sys.exit(1)
 
-    with open(filename, 'r') as f:
-        data = f.readlines()
-        f.close()
+    time.sleep(1.5) #need to wait for the file to be closed before writing to it
 
-    for i in range(len(data)):
-        if data[i].find('#AUTO'+'-V') >= 0: vstringfound = True #done this way to prevent finding itself
-        if (data[i].find('version = "v') >= 0) and (vstringfound):
-            #print('found version string: ' + data[i])
-            version = GetVersion(data[i])
-            revision = GetRevision(data[i])
-            revision = int(revision) + 1
-            now = datetime.datetime.now()
-            now = now.strftime("%Y/%m/%d")
-            date = GetDate(data[i])
-            if date != now: revision = 0
+    # Create temporary file in same directory to ensure same filesystem
+    temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(filename))
+    
+    try:
+        with open(filename, 'r') as infile:
+            with os.fdopen(temp_fd, 'w') as outfile:
+                for line in infile:
+                    if line.find('#AUTO'+'-V') >= 0: vstringfound = True #done this way to prevent finding itself
+                    if (line.find('version = "v') >= 0) and (vstringfound):
+                        version = GetVersion(line)
+                        revision = GetRevision(line)
+                        revision = int(revision) + 1
+                        now = datetime.datetime.now()
+                        now = now.strftime("%Y/%m/%d")
+                        date = GetDate(line)
+                        if date != now: revision = 0
 
-            newversion = 'version = "'+version + '-' + now + 'r' + str(revision).zfill(2)+'"'
-            print('new      : ' + newversion+'<--')
-            print('previous : ' + data[i])
-            data[i] = newversion + '\n'
-            found = True
-            break
-    if found:
-        time.sleep(1.5) #need to wait for the file to be closed before writing to it
-        outfile = open(filename, 'w')
-        outfile.writelines(data)
-        outfile.close()
-        print('file updated: ' + filename)
-    else:
-        print('version string not found in file or not AUTO-V: ' + filename)
+                        newversion = 'version = "'+version + '-' + now + 'r' + str(revision).zfill(2)+'"'
+                        print('new      : ' + newversion+'<--')
+                        print('previous : ' + line.rstrip())
+                        outfile.write(newversion + '\n')
+                        found = True
+                    else:
+                        outfile.write(line)
+        
+        if found:
+            # Atomic replace of original file
+            os.replace(temp_path, filename)
+            print('file updated: ' + filename)
+        else:
+            print('version string not found in file or not AUTO-V: ' + filename)
+    finally:
+        # Clean up temp file if it still exists (in case of error)
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)

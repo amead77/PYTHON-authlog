@@ -47,40 +47,6 @@
 #   CHANGE: there's a lot of hard coded text, probably should move to a file so translations are possible.
 #   CHANGE: see FirstRunCheckBlocklist() for TODO: block specific users
 #
-
-####################### [ Changes ] #######################
-# earlier wasn't noted... in fact I rarely noted changes, I really should.
-# 2020 - 2023: I don't remember what I did, but it was a lot. Which hardly any remains of, and is unhelpful to even bother mentioning...
-# 2023-06-01 beginning to implement failcount, but not done yet
-# 2023-06-18 pretty much done, tidying up in progress. wasn't much in libby.py so i merged it back in/
-# 2023-06-25 added logging to see what is happening. suspect not correctly blocking new IPs, will see
-# 2023-06-27 FIXED: not blocking new IPs, checking auth.log size changes was outside the loop, oops.
-# 2023-06-28 FIXED: number of blocked IPs was incorrect by 1. added more auth error types to ScanAndCompare()
-#                   also simplified ScanAndCompare()
-# 2023-07-01 CHANGED: moving from cmdline args to .ini file for settings
-# 2023-07-02 ADDED: beginning of implementing vnc log parsing. (scanandcompare() to work on finishing)
-# 2023-07-03 CHANGED: opening logfiles as streams now split to check files exist and try..except to catch errors
-# 2023-07-03 ADDED: settings.ini can now have multiple local IP addresses to ignore, separated by commas
-# 2023-07-09 CHANGED: exception: to exception Exception as e: to catch all non fatals.
-# 2023-07-11 FIXED: date string read from log could cause ctd if not in correct format. Now substitutes with 2001-01-01 00:00:00
-# 2023-07-11 ADDED: some more exception handling, removed some globals.
-# 2023-07-12 CHANGED: cleaning up, checking for possible exceptions.
-# 2023-07-12 ADDED: -n/--nolog option to not log to file, just print to screen.
-# 2023-07-12 CHANGED: if adding a new block, updates the blocklist file (within 10s) rather than waiting for ctrl-c
-# 2023-07-16 FIXED: blocklist update delay was not working, now fixed.
-# 2023-07-28 ADDED: sigterm handler to close gracefully on shutdown, I hope.
-# 2023-07-30 ADDED: when adding a datetime to existing IP, show which array index it is.
-# 2023-08-06 ADDED: restart time, so it can be restarted at a specific time of day. (in conjunction with bash script looping it)
-#                   This is because I noticed some weirdness with the log file, seems after some days it just stopped blocking.
-#                   Restarting it every day should fix that until I know why.
-# 2023-08-06 CHANGED: split OpenLogFilesAsStream() into 4 funcs, OpenAuthAsStream(), OpenVNCAsStream(), CheckAuthLog(), CheckVNCLog()
-# 2023-08-08 FIXED: I hope... CheckAuthLog() and CheckVNCLog() were checking if log was cycled, but not closing/reopening the stream, just resetting the position.
-#                   Now closes/reopens the stream if log is cycled. I'll change the reset time to a nil value to test for a few days.
-# 2023-08-10 ADDED: AmAlive() added to print a timestamp to log every hour to show it's still functioning
-# 2023-08-10 ADDED: Auto block specific users, such as root, pi... (see settings.ini) - DISABLED due to I've screwed up.
-# 2023-08-19 FIXED: log rotation checking error. noticed file pos was being reset to zero on every check
-# 2023-08-20 FIXED: auto block users fixed. also no longer overwrites settings.ini on exit, only if it doesn't exist.
-# 2023-08-25 CHANGED: more verbose in blocking IPs, some more exception handling.
 #
 ####################### [ How this works ] #######################
 # Reads /var/log/auth.log file, parses it very simply, creates an array of IP addresses along with a sub array of
@@ -94,30 +60,29 @@
 # I will try to adjust it for consistency.
 #
 
+#from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate, as it's annoying
+#import select #for keyboard input (os stdin)
+#import readchar #for keyboard input (readchar.readkey())
+#import curses #for keyboard input (curses.wrapper()) hopefully works over ssh
+#from sshkeyboard import listen_keyboard, stop_listening
 
 
 #########################################################
 ####################### [ Setup ] #######################
 #########################################################
-#from getpass import getpass #not used anymore, should be run as sudo root, not try to elevate, as it's annoying
 import errno
 import os, argparse, sys, io, time, subprocess
 import signal #for ctrl-c detection
 import pickle #for saving blocklist
 import datetime #for timestamping#
 import configparser #for reading ini file
-#import select #for keyboard input (os stdin)
-#import readchar #for keyboard input (readchar.readkey())
-#import curses #for keyboard input (curses.wrapper()) hopefully works over ssh
-
-#from sshkeyboard import listen_keyboard, stop_listening
 import gzip #these two for gzipping the log file
 import shutil
 
 debugmode = False
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v1.0-2025/08/14r00"
+version = "v1.0-2026/02/25r01"
 
 class cBlock:
     def __init__(self, vDT=None, ip=None, vReason = None, vUsername = None): #failcount not needed as count of datetime array will show failures
