@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r07"
+version = "v2.1-2026/02/27r15"
 
 
 @dataclass
@@ -204,6 +204,19 @@ class AuthLogger2:
         args = parser.parse_args()
         self.dry_run = bool(args.dry_run)
         self.debugmode = self.dry_run
+
+    def check_root_or_enable_debug(self):
+        # iptables writes require root privileges. If not root, enforce safe dry-run mode.
+        try:
+            is_root = (os.geteuid() == 0)
+        except AttributeError:
+            # Non-POSIX fallback: behave safely.
+            is_root = False
+
+        if not is_root:
+            self.debugmode = True
+            self.dry_run = True
+            self.log('Not running as root/sudo; forcing debug dry-run mode (iptables writes disabled).')
 
     def detect_best_path(self, candidates):
         for path in candidates:
@@ -474,6 +487,62 @@ class AuthLogger2:
             return
         if self.iptables_save_cmd:
             self.run_cmd([self.iptables_save_cmd], timeout=5)
+
+    def flush_iptables_startup(self):
+        # Requested startup behavior: clear existing in-memory rules first.
+        if self.dry_run:
+            self.log('[DRY-RUN] would run: iptables -F')
+            return
+        if not self.iptables_available:
+            self.log('iptables unavailable, cannot flush startup rules')
+            return
+        if self.run_cmd([self.iptables_cmd, '-F']):
+            self.log('Startup firewall flush complete: iptables -F')
+        else:
+            self.log('Startup firewall flush failed: iptables -F')
+
+    def get_saved_blocked_ips(self):
+        cur = self.db.execute('SELECT ip, reason FROM blocked_ips ORDER BY ip ASC')
+        return cur.fetchall()
+
+    def restore_saved_blocks_to_firewall(self):
+        saved = self.get_saved_blocked_ips()
+        self.log(f'Loading saved blocks into firewall ({len(saved)} total)...')
+
+        restored = 0
+        failed = 0
+        skipped = 0
+
+        for ip, reason in saved:
+            self.active_blocked_ips.add(ip)
+
+            if self.dry_run:
+                restored += 1
+                continue
+
+            if not self.iptables_available:
+                failed += 1
+                continue
+
+            if self.run_cmd([self.iptables_cmd, '-C', self.iptables_chain, '-s', ip, '-j', 'DROP']):
+                skipped += 1
+                continue
+
+            if self.run_cmd([self.iptables_cmd, '-A', self.iptables_chain, '-s', ip, '-j', 'DROP']):
+                restored += 1
+            else:
+                failed += 1
+
+        if self.dry_run:
+            self.log(
+                f'[DRY-RUN] startup block restore summary: '
+                f'would_restore={restored}, failed={failed}, skipped={skipped}'
+            )
+        else:
+            self.log(
+                f'startup block restore summary: '
+                f'restored={restored}, failed={failed}, skipped={skipped}'
+            )
 
     def block_ip(self, ip: str, reason: str):
         if ip in self.active_blocked_ips or self.is_ip_blocked_recorded(ip):
@@ -864,12 +933,17 @@ class AuthLogger2:
         self.open_log()
         self.welcome()
         self.setup_signals()
+        self.check_root_or_enable_debug()
 
         self.load_settings()
         self.open_db()
 
         self.detect_iptables()
+
+        # Requested startup behavior: reset firewall rules, then rebuild from saved blocklist.
+        self.flush_iptables_startup()
         self.setup_firewall_chain()
+        self.restore_saved_blocks_to_firewall()
 
         self.open_source(self.auth)
         self.open_source(self.kern)
