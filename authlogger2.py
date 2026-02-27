@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r20"
+version = "v2.1-2026/02/27r22"
 
 
 @dataclass
@@ -276,6 +276,7 @@ class AuthLogger2:
             'poll_ticks': '4',
             'flush_ticks': '80',
             'sleep_seconds': '0.25',
+            'log_buffer_seconds': '1.0',
             'install_scan_rule': 'true',
         }
 
@@ -319,6 +320,11 @@ class AuthLogger2:
         except ValueError:
             self.sleep_seconds = 0.25
 
+        try:
+            self.log_buffer_interval_seconds = max(0.05, float(get('log_buffer_seconds')))
+        except ValueError:
+            self.log_buffer_interval_seconds = 1.0
+
         self.install_scan_rule = get('install_scan_rule').lower() in ('1', 'true', 'yes', 'y', 'on')
 
         self.auth.enabled = os.path.isfile(self.auth.path)
@@ -330,6 +336,7 @@ class AuthLogger2:
         self.log(f'Autoblock users: {self.autoblock_users}')
         self.log(f'failcount: {self.failcount}')
         self.log(f'restart_time: {self.restart_time}')
+        self.log(f'log_buffer_seconds: {self.log_buffer_interval_seconds}')
         self.log(f'authfile: {self.auth.path} [{"ok" if self.auth.enabled else "missing"}]')
         self.log(f'kernfile: {self.kern.path} [{"ok" if self.kern.enabled else "missing"}]')
         self.log(f'vncfile: {self.vnc.path} [{"ok" if self.vnc.enabled else "missing"}]')
@@ -349,6 +356,7 @@ class AuthLogger2:
             'poll_ticks': str(self.poll_every_ticks),
             'flush_ticks': str(self.flush_every_ticks),
             'sleep_seconds': str(self.sleep_seconds),
+            'log_buffer_seconds': str(self.log_buffer_interval_seconds),
             'install_scan_rule': 'true' if self.install_scan_rule else 'false',
         }
 
