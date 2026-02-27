@@ -35,7 +35,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r03"
+version = "v2.1-2026/02/27r04"
 
 
 @dataclass
@@ -151,7 +151,7 @@ class AuthLogger2:
         log_dir = os.path.dirname(self.log_path)
         os.makedirs(log_dir, exist_ok=True)
         self.log_handle = open(self.log_path, 'a', encoding='utf-8')
-        self.log(f'authlogger2 started. Version: {VERSION}')
+        self.log(f'authlogger2 started. version: {version}')
 
     ############################
     # Process lifecycle
@@ -191,7 +191,7 @@ class AuthLogger2:
     def welcome(self):
         print('\n[==-- authlogger2 hardened monitor --==]\n')
         print('Watches auth/kern/vnc logs and blocks hostile IPs via iptables.\n')
-        print(f'Version: {VERSION}')
+        print(f'version: {version}')
         if self.dry_run:
             print('Dry-run mode active: no firewall writes performed.')
 
