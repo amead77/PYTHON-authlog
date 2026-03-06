@@ -41,7 +41,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/02/27r31"
+version = "v2.1-2026/03/06r01"
 
 
 @dataclass
@@ -683,6 +683,8 @@ class AuthLogger2:
 
         self.active_blocked_ips.add(ip)
         self.record_blocked_ip(ip, reason)
+        # Blocklist entries are security-critical, so persist immediately.
+        self.commit_state_immediately(context=f'block_ip {ip}')
 
         if self.dry_run:
             self.log(f'[DRY-RUN] block {ip} reason: {reason}')
@@ -1029,12 +1031,25 @@ class AuthLogger2:
         nowtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         if (nowtime[-5:-3] == '00') and (nowtime[-8:-6] != self.last_checkin_hour):
             self.last_checkin_hour = nowtime[-8:-6]
+            self.commit_state_if_needed()
             self.log('Checking in, nothing to report')
 
     def commit_state_if_needed(self):
         if self.pending_state_write and self.db is not None:
             self.db.commit()
             self.pending_state_write = False
+
+    def commit_state_immediately(self, context: str = ''):
+        if self.db is None:
+            return
+        try:
+            self.db.commit()
+            self.pending_state_write = False
+        except Exception as exc:
+            if context:
+                self.log(f'immediate state commit failed ({context}): {exc}')
+            else:
+                self.log(f'immediate state commit failed: {exc}')
 
     ############################
     # Shutdown / error
@@ -1130,8 +1145,21 @@ class AuthLogger2:
                 time.sleep(1.0)
 
     def run(self):
-        self.setup()
-        self.run_loop()
+        try:
+            self.setup()
+            self.run_loop()
+        except KeyboardInterrupt:
+            self.close_gracefully(exitcode=130)
+        except SystemExit:
+            raise
+        except Exception:
+            try:
+                self.log('Fatal exception outside main loop:')
+                self.log(traceback.format_exc())
+            except Exception:
+                # Keep shutdown path resilient even if logging is unavailable.
+                pass
+            self.close_gracefully(exitcode=1)
 
 
 def main():
