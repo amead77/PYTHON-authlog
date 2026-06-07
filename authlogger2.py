@@ -41,7 +41,7 @@ Primary improvements over prior versions:
 """
 #version should now be auto-updated by version_update.py. Do not manually change except the major/minor version. Next comment req. for auto-update
 #AUTO-V
-version = "v2.1-2026/03/06r01"
+version = "v2.1-2026/06/07r02"
 
 
 @dataclass
@@ -525,6 +525,13 @@ class AuthLogger2:
     def setup_firewall_chain(self):
         if self.dry_run or not self.iptables_available:
             return
+
+        # Ensure loopback interface is always accepted (INPUT and OUTPUT).
+        # This prevents iptables rules from accidentally blocking local connections.
+        if not self.run_cmd([self.iptables_cmd, '-C', 'INPUT', '-i', 'lo', '-j', 'ACCEPT']):
+            self.run_cmd([self.iptables_cmd, '-I', 'INPUT', '1', '-i', 'lo', '-j', 'ACCEPT'])
+        if not self.run_cmd([self.iptables_cmd, '-C', 'OUTPUT', '-o', 'lo', '-j', 'ACCEPT']):
+            self.run_cmd([self.iptables_cmd, '-I', 'OUTPUT', '1', '-o', 'lo', '-j', 'ACCEPT'])
 
         # Create dedicated chain and hook it into INPUT once.
         self.run_cmd([self.iptables_cmd, '-N', self.iptables_chain])
